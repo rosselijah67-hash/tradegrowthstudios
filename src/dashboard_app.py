@@ -301,10 +301,11 @@ def resolve_project_path(path: str | Path | None) -> Path | None:
     return project_path(raw_path).resolve(strict=False)
 
 
-MEDIA_ROOTS = tuple(
-    (PROJECT_ROOT / directory).resolve(strict=False)
+MEDIA_ROOT_MAP = {
+    directory: (PROJECT_ROOT / directory).resolve(strict=False)
     for directory in ("screenshots", "artifacts", "runs")
-)
+}
+MEDIA_ROOTS = tuple(MEDIA_ROOT_MAP.values())
 
 
 def resolve_media_path(path: str | Path | None) -> Path | None:
@@ -341,11 +342,14 @@ def file_url_for(path: str | Path | None) -> str | None:
     resolved = resolve_media_path(path)
     if resolved is None:
         return None
-    try:
-        relative_path = resolved.relative_to(PROJECT_ROOT.resolve(strict=False))
-    except ValueError:
-        return None
-    return url_for("project_media", relative_path=relative_path.as_posix())
+    for root_name, media_root in MEDIA_ROOT_MAP.items():
+        try:
+            tail_path = resolved.relative_to(media_root)
+        except ValueError:
+            continue
+        relative_path = Path(root_name) / tail_path
+        return url_for("project_media", relative_path=relative_path.as_posix())
+    return None
 
 
 def markets_config_path() -> Path:
@@ -720,7 +724,7 @@ def load_artifacts(prospect_id: int) -> list[dict[str, Any]]:
     artifacts = []
     for row in rows:
         artifact = _row_to_dict(row)
-        resolved_path = resolve_project_path(artifact.get("path"))
+        resolved_path = resolve_media_path(artifact.get("path")) or resolve_project_path(artifact.get("path"))
         artifact["metadata"] = parse_json_field(artifact.get("metadata_json"))
         artifact["file_url"] = file_url_for(artifact.get("path"))
         artifact["file_exists"] = bool(resolved_path and resolved_path.is_file())
@@ -2934,7 +2938,7 @@ def load_artifact_map_for_prospects(prospect_ids: list[int]) -> dict[int, dict[s
     for row in rows:
         artifact = _row_to_dict(row)
         artifact["metadata"] = parse_json_field(artifact.get("metadata_json"))
-        resolved_path = resolve_project_path(artifact.get("path"))
+        resolved_path = resolve_media_path(artifact.get("path")) or resolve_project_path(artifact.get("path"))
         artifact["file_exists"] = bool(resolved_path and resolved_path.is_file())
         artifact["file_url"] = file_url_for(artifact.get("path"))
         result.setdefault(int(artifact["prospect_id"]), {}).setdefault(
