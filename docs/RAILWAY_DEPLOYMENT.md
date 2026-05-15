@@ -119,7 +119,9 @@ Do not overwrite the Railway database after real users begin editing unless you 
 
 The SQLite database stores paths like `screenshots/desktop/1.png`; the actual image files are separate. If the database is uploaded without these folders, the review queue will show missing desktop/mobile images.
 
-Use this only while importing media:
+Current preferred path: commit public screenshot files under `screenshots/` to GitHub. Railway's Docker build includes them, and the entrypoint copies them into the persistent volume when `USE_STORAGE_SYMLINKS=1`.
+
+Fallback browser upload path, for generated media that should not be committed:
 
 1. In Railway variables, set:
 
