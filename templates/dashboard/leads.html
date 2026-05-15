@@ -54,7 +54,7 @@
 
 <section class="table-panel">
   <div class="table-wrap">
-    <table>
+    <table class="leads-table">
       <thead>
         <tr>
           <th>ID</th>
@@ -62,25 +62,16 @@
           <th>Market</th>
           <th>Niche</th>
           <th>Website</th>
-          <th>Phone</th>
           <th>Rating</th>
           <th>Reviews</th>
-          <th>Qualification</th>
-          <th>Audit</th>
-          <th>Review Status</th>
-          <th>Decision</th>
-          <th>Close</th>
-          <th>Pain</th>
-          <th>Status</th>
-          <th>Next Action</th>
-          <th>Exclusion</th>
+          <th>Workflow</th>
+          <th>Scores</th>
           <th>Stage</th>
-          <th>Case</th>
         </tr>
       </thead>
       <tbody>
         {% for lead in leads %}
-          <tr>
+          <tr class="lead-click-row" data-case-url="{{ url_for('case_file', prospect_id=lead.id) }}" tabindex="0" role="link" aria-label="Open case for {{ lead.business_name }}">
             <td>{{ lead.id }}</td>
             <td class="business-cell">{{ lead.business_name }}</td>
             <td>{{ lead.market or "" }}</td>
@@ -88,37 +79,51 @@
             <td>
               {% set href = lead.website_url|external_href %}
               {% if href %}
-                <a href="{{ href }}" target="_blank" rel="noopener noreferrer">{{ lead.website_url }}</a>
+                <a class="website-pill" href="{{ href }}" target="_blank" rel="noopener noreferrer" title="{{ lead.website_url }}">Website</a>
               {% endif %}
             </td>
-            <td>{{ lead.phone or "" }}</td>
             <td>{{ lead.rating if lead.rating is not none else "" }}</td>
             <td>{{ lead.user_rating_count if lead.user_rating_count is not none else "" }}</td>
-            <td>{{ lead.qualification_status or "" }}</td>
-            <td>{{ lead.audit_data_status or "" }}</td>
-            <td>{{ lead.human_review_status or "" }}</td>
-            <td>{{ lead.human_review_decision or "" }}</td>
-            <td>{{ lead.expected_close_score }}</td>
-            <td>{{ lead.website_pain_score }}</td>
-            <td>{{ lead.status or "" }}</td>
-            <td>{{ lead.next_action or "" }}</td>
-            <td>
+            <td class="workflow-cell">
+              <span>Qual: {{ lead.qualification_status or "n/a" }}</span>
+              <span>Audit: {{ lead.audit_data_status or "n/a" }}</span>
+              <span>Review: {{ lead.human_review_decision or lead.human_review_status or "n/a" }}</span>
               {% if lead.franchise_exclusion and lead.franchise_exclusion.is_excluded %}
                 <span class="pill {{ 'status-fail' if lead.franchise_exclusion.is_hard_exclude else 'status-warn' }}">
                   {{ "Hard" if lead.franchise_exclusion.is_hard_exclude else "Soft" }}
                 </span>
               {% endif %}
             </td>
+            <td class="score-cell">
+              <span><strong>{{ lead.expected_close_score }}</strong> close</span>
+              <span><strong>{{ lead.website_pain_score }}</strong> pain</span>
+            </td>
             <td><span class="pill">{{ lead.pipeline_stage|pretty_label }}</span></td>
-            <td><a class="table-action" href="{{ url_for('case_file', prospect_id=lead.id) }}">Open</a></td>
           </tr>
         {% else %}
           <tr>
-            <td colspan="19" class="empty">No leads match the current filters.</td>
+            <td colspan="10" class="empty">No leads match the current filters.</td>
           </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </section>
+
+<script>
+  document.querySelectorAll(".lead-click-row").forEach((row) => {
+    row.addEventListener("click", (event) => {
+      if (event.target.closest("a, button, input, select, textarea")) {
+        return;
+      }
+      window.location.href = row.dataset.caseUrl;
+    });
+    row.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        window.location.href = row.dataset.caseUrl;
+      }
+    });
+  });
+</script>
 {% endblock %}

@@ -38,6 +38,16 @@ CONVERSION_PATH_RE = re.compile(
     r"\b(book|booking|schedule|appointment|calendar|estimate|quote|contact)\b",
     re.IGNORECASE,
 )
+PROTECTED_SCORING_STATUSES = (
+    "INELIGIBLE",
+    "REJECTED_REVIEW",
+    "DISCARDED",
+    "CLOSED_WON",
+    "CLOSED_LOST",
+    "PROJECT_ACTIVE",
+    "PROJECT_COMPLETE",
+)
+PROTECTED_SCORING_NEXT_ACTIONS = ("REJECTED_BY_REVIEW",)
 
 
 def _json_loads(value: str | None, fallback: Any) -> Any:
@@ -61,6 +71,8 @@ def _select_audited_prospects(
     limit: int | None,
     prospect_id: int | None = None,
 ) -> list[dict[str, Any]]:
+    blocked_statuses = ",".join("?" for _ in PROTECTED_SCORING_STATUSES)
+    blocked_next_actions = ",".join("?" for _ in PROTECTED_SCORING_NEXT_ACTIONS)
     if prospect_id is not None:
         clauses = ["id = ?"]
         params: list[Any] = [prospect_id]
@@ -80,6 +92,10 @@ def _select_audited_prospects(
         if niche:
             clauses.append("niche = ?")
             params.append(niche)
+    clauses.append(f"(status IS NULL OR status NOT IN ({blocked_statuses}))")
+    clauses.append(f"(next_action IS NULL OR next_action NOT IN ({blocked_next_actions}))")
+    params.extend(PROTECTED_SCORING_STATUSES)
+    params.extend(PROTECTED_SCORING_NEXT_ACTIONS)
 
     sql = f"SELECT * FROM prospects WHERE {' AND '.join(clauses)} ORDER BY id"
     if limit is not None:
@@ -558,7 +574,9 @@ def _score_prospect(
         human_review_decision=prospect.get("human_review_decision"),
     )
     status_update = None
-    if (
+    if audit_data_status == AuditDataStatus.READY and eligibility_status != "ELIGIBLE":
+        status_update = ProspectStatus.INELIGIBLE
+    elif (
         audit_data_status == AuditDataStatus.READY
         and human_review_status == HumanReviewStatus.PENDING
     ):

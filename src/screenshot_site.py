@@ -15,6 +15,16 @@ COMMAND = "screenshot_site"
 SCREENSHOT_TIMEOUT_MS = 15_000
 DESKTOP_VIEWPORT = {"width": 1440, "height": 1000}
 MOBILE_VIEWPORT = {"width": 390, "height": 844}
+PROTECTED_SCREENSHOT_STATUSES = (
+    "INELIGIBLE",
+    "REJECTED_REVIEW",
+    "DISCARDED",
+    "CLOSED_WON",
+    "CLOSED_LOST",
+    "PROJECT_ACTIVE",
+    "PROJECT_COMPLETE",
+)
+PROTECTED_SCREENSHOT_NEXT_ACTIONS = ("REJECTED_BY_REVIEW",)
 
 
 def _normalize_url(value: str | None) -> str | None:
@@ -38,12 +48,19 @@ def _select_screenshot_prospects(
     niche: str | None,
     limit: int | None,
 ) -> list[dict[str, Any]]:
+    blocked_statuses = ",".join("?" for _ in PROTECTED_SCREENSHOT_STATUSES)
+    blocked_next_actions = ",".join("?" for _ in PROTECTED_SCREENSHOT_NEXT_ACTIONS)
     clauses = [
         "qualification_status IN ('DISCOVERED', 'QUALIFIED', 'AUDITED')",
+        f"(status IS NULL OR status NOT IN ({blocked_statuses}))",
+        f"(next_action IS NULL OR next_action NOT IN ({blocked_next_actions}))",
         "website_url IS NOT NULL",
         "website_url <> ''",
     ]
-    params: list[Any] = []
+    params: list[Any] = [
+        *PROTECTED_SCREENSHOT_STATUSES,
+        *PROTECTED_SCREENSHOT_NEXT_ACTIONS,
+    ]
     if market:
         clauses.append("market = ?")
         params.append(market)

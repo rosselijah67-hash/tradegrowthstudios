@@ -36,6 +36,21 @@
   {% endfor %}
 </section>
 
+<section class="panel trash-overview">
+  <div>
+    <div class="panel-header">
+      <h2>Trash Can</h2>
+    </div>
+    <p>Rejected, discarded, or ineligible leads stay out of the CRM, but their identifying info stays saved for dedupe.</p>
+  </div>
+  <div class="trash-overview-stats">
+    <span><strong>{{ trash_summary.count }}</strong> trashed</span>
+    <span><strong>{{ trash_summary.media_due }}</strong> media due</span>
+    <span><strong>{{ trash_summary.media_purged }}</strong> media purged</span>
+  </div>
+  <a class="button" href="{{ url_for('trash_can', market=market_filter.selected) if market_filter.selected else url_for('trash_can') }}">Open Trash</a>
+</section>
+
 <section class="table-panel market-summary-panel">
   <div class="panel-header">
     <h2>Market Summary</h2>

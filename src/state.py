@@ -80,10 +80,13 @@ class OutreachEventStatus:
 
 
 TERMINAL_CRM_STATUSES = {
+    ProspectStatus.INELIGIBLE,
+    ProspectStatus.REJECTED_REVIEW,
     ProspectStatus.CLOSED_WON,
     ProspectStatus.CLOSED_LOST,
     ProspectStatus.PROJECT_ACTIVE,
     ProspectStatus.PROJECT_COMPLETE,
+    ProspectStatus.DISCARDED,
 }
 
 PIPELINE_STAGE_BUCKETS = [

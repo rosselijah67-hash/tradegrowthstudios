@@ -17,7 +17,7 @@ import ssl
 import sys
 import threading
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from email.utils import formataddr
 from pathlib import Path
@@ -98,6 +98,20 @@ PUBLIC_AUTH_ENDPOINTS = {
     "public_packet_page",
     "public_packet_asset",
 }
+TRASH_MEDIA_RETENTION_DAYS = 3
+TRASH_STATUSES = ("INELIGIBLE", "REJECTED_REVIEW", "DISCARDED")
+TRASH_QUALIFICATION_STATUSES = ("DISQUALIFIED",)
+TRASH_MEDIA_ARTIFACT_TYPES = ("screenshot_desktop", "screenshot_mobile")
+PROTECTED_JOB_STATUSES = (
+    "INELIGIBLE",
+    "REJECTED_REVIEW",
+    "DISCARDED",
+    "CLOSED_WON",
+    "CLOSED_LOST",
+    "PROJECT_ACTIVE",
+    "PROJECT_COMPLETE",
+)
+PROTECTED_JOB_NEXT_ACTIONS = ("REJECTED_BY_REVIEW",)
 
 PIPELINE_JOBS = {
     "eligibility": {
@@ -567,6 +581,323 @@ def append_market_filter(
     if clause != "1 = 1":
         clauses.append(clause)
         params.extend(clause_params)
+
+
+def append_active_prospect_filter(clauses: list[str], params: list[Any]) -> None:
+    status_placeholders = ",".join("?" for _ in TRASH_STATUSES)
+    qualification_placeholders = ",".join("?" for _ in TRASH_QUALIFICATION_STATUSES)
+    clauses.extend(
+        [
+            f"UPPER(COALESCE(status, '')) NOT IN ({status_placeholders})",
+            f"UPPER(COALESCE(qualification_status, '')) NOT IN ({qualification_placeholders})",
+        ]
+    )
+    params.extend(TRASH_STATUSES)
+    params.extend(TRASH_QUALIFICATION_STATUSES)
+
+
+def append_trash_prospect_filter(clauses: list[str], params: list[Any]) -> None:
+    status_placeholders = ",".join("?" for _ in TRASH_STATUSES)
+    qualification_placeholders = ",".join("?" for _ in TRASH_QUALIFICATION_STATUSES)
+    clauses.append(
+        "("
+        f"UPPER(COALESCE(status, '')) IN ({status_placeholders}) "
+        f"OR UPPER(COALESCE(qualification_status, '')) IN ({qualification_placeholders})"
+        ")"
+    )
+    params.extend(TRASH_STATUSES)
+    params.extend(TRASH_QUALIFICATION_STATUSES)
+
+
+def append_job_protected_filter(clauses: list[str], params: list[Any]) -> None:
+    status_placeholders = ",".join("?" for _ in PROTECTED_JOB_STATUSES)
+    next_action_placeholders = ",".join("?" for _ in PROTECTED_JOB_NEXT_ACTIONS)
+    clauses.extend(
+        [
+            f"UPPER(COALESCE(status, '')) NOT IN ({status_placeholders})",
+            f"UPPER(COALESCE(next_action, '')) NOT IN ({next_action_placeholders})",
+        ]
+    )
+    params.extend(PROTECTED_JOB_STATUSES)
+    params.extend(PROTECTED_JOB_NEXT_ACTIONS)
+
+
+def _metadata_dict(value: Any) -> dict[str, Any]:
+    metadata = parse_json_field(value)
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _parse_utc_datetime(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _trash_due_label(value: Any) -> str:
+    due_at = _parse_utc_datetime(value)
+    if due_at is None:
+        return "Not scheduled"
+    now = datetime.now(timezone.utc)
+    if due_at <= now:
+        return "Due now"
+    delta = due_at - now
+    days = delta.days
+    if days >= 1:
+        return f"{days + 1} days"
+    hours = max(1, int(delta.total_seconds() // 3600))
+    return f"{hours} hours"
+
+
+def mark_prospect_trashed(
+    connection: sqlite3.Connection,
+    *,
+    prospect_id: int,
+    reason: str,
+    previous: dict[str, Any] | sqlite3.Row | None = None,
+) -> None:
+    row = previous or connection.execute(
+        "SELECT * FROM prospects WHERE id = ?",
+        (prospect_id,),
+    ).fetchone()
+    current = _row_to_dict(row) if isinstance(row, sqlite3.Row) else dict(row or {})
+    metadata = _metadata_dict(current.get("metadata_json"))
+    trash = metadata.get("trash") if isinstance(metadata.get("trash"), dict) else {}
+    now_dt = datetime.now(timezone.utc).replace(microsecond=0)
+    now = now_dt.isoformat()
+    delete_after = (now_dt + timedelta(days=TRASH_MEDIA_RETENTION_DAYS)).isoformat()
+    metadata["trash"] = {
+        **trash,
+        "is_trashed": True,
+        "reason": reason,
+        "trashed_at": trash.get("trashed_at") or now,
+        "media_delete_after": trash.get("media_delete_after") or delete_after,
+        "media_retention_days": TRASH_MEDIA_RETENTION_DAYS,
+        "previous_status": trash.get("previous_status") or current.get("status"),
+        "previous_next_action": trash.get("previous_next_action") or current.get("next_action"),
+        "previous_human_review_status": trash.get("previous_human_review_status")
+        or current.get("human_review_status"),
+        "previous_human_review_decision": trash.get("previous_human_review_decision")
+        or current.get("human_review_decision"),
+    }
+    connection.execute(
+        """
+        UPDATE prospects
+        SET metadata_json = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (json.dumps(metadata, sort_keys=True), now, prospect_id),
+    )
+
+
+def clear_trash_metadata(connection: sqlite3.Connection, prospect_id: int) -> None:
+    row = connection.execute(
+        "SELECT metadata_json FROM prospects WHERE id = ?",
+        (prospect_id,),
+    ).fetchone()
+    if row is None:
+        return
+    metadata = _metadata_dict(row["metadata_json"])
+    trash = metadata.get("trash")
+    if isinstance(trash, dict):
+        history = metadata.setdefault("trash_history", [])
+        if isinstance(history, list):
+            history.append({**trash, "restored_at": utc_now()})
+        metadata.pop("trash", None)
+    connection.execute(
+        """
+        UPDATE prospects
+        SET metadata_json = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (json.dumps(metadata, sort_keys=True), utc_now(), prospect_id),
+    )
+
+
+def restore_state_for_prospect(prospect: dict[str, Any], trash: dict[str, Any]) -> dict[str, Any]:
+    previous_status = _normalize_token(trash.get("previous_status"))
+    previous_next_action = _normalize_token(trash.get("previous_next_action"))
+    previous_review_status = _normalize_token(trash.get("previous_human_review_status"))
+    previous_review_decision = _normalize_token(trash.get("previous_human_review_decision"))
+    if previous_status and previous_status not in TRASH_STATUSES:
+        return {
+            "status": previous_status,
+            "next_action": previous_next_action or CRM_NEXT_ACTIONS.get(previous_status),
+            "human_review_status": previous_review_status or prospect.get("human_review_status"),
+            "human_review_decision": previous_review_decision or prospect.get("human_review_decision"),
+        }
+    if _normalize_token(prospect.get("audit_data_status")) == "READY":
+        return {
+            "status": "PENDING_REVIEW",
+            "next_action": "HUMAN_REVIEW",
+            "human_review_status": "PENDING",
+            "human_review_decision": None,
+        }
+    if _normalize_token(prospect.get("qualification_status")) == "QUALIFIED":
+        return {
+            "status": "ELIGIBLE_FOR_AUDIT",
+            "next_action": "RUN_AUDIT",
+            "human_review_status": prospect.get("human_review_status"),
+            "human_review_decision": None,
+        }
+    return {
+        "status": "NEW",
+        "next_action": None,
+        "human_review_status": prospect.get("human_review_status"),
+        "human_review_decision": None,
+    }
+
+
+def restore_trashed_prospect(connection: sqlite3.Connection, prospect: dict[str, Any]) -> None:
+    metadata = _metadata_dict(prospect.get("metadata_json"))
+    trash = metadata.get("trash") if isinstance(metadata.get("trash"), dict) else {}
+    restored_state = restore_state_for_prospect(prospect, trash)
+    history = metadata.setdefault("trash_history", [])
+    if isinstance(history, list):
+        history.append({**trash, "restored_at": utc_now()})
+    metadata.pop("trash", None)
+    now = utc_now()
+    connection.execute(
+        """
+        UPDATE prospects
+        SET status = ?,
+            next_action = ?,
+            human_review_status = ?,
+            human_review_decision = ?,
+            metadata_json = ?,
+            updated_at = ?
+        WHERE id = ?
+        """,
+        (
+            restored_state["status"],
+            restored_state["next_action"],
+            restored_state["human_review_status"],
+            restored_state["human_review_decision"],
+            json.dumps(metadata, sort_keys=True),
+            now,
+            prospect["id"],
+        ),
+    )
+    insert_crm_stage_event(
+        connection,
+        prospect_id=prospect["id"],
+        old_status=prospect.get("status"),
+        old_next_action=prospect.get("next_action"),
+        new_status=restored_state["status"],
+        next_action=restored_state["next_action"] or "",
+        note="Restored from trash",
+        metadata={"source": "trash_restore"},
+    )
+
+
+def purge_due_trash_media(connection: sqlite3.Connection) -> dict[str, int]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    append_trash_prospect_filter(clauses, params)
+    rows = [
+        _row_to_dict(row)
+        for row in connection.execute(
+            f"SELECT * FROM prospects WHERE {' AND '.join(clauses)}",
+            params,
+        ).fetchall()
+    ]
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.replace(microsecond=0).isoformat()
+    prospects_checked = 0
+    prospects_purged = 0
+    files_deleted = 0
+    artifacts_marked = 0
+    for prospect in rows:
+        metadata = _metadata_dict(prospect.get("metadata_json"))
+        trash = metadata.get("trash") if isinstance(metadata.get("trash"), dict) else {}
+        if not trash:
+            trashed_at = prospect.get("human_reviewed_at") or prospect.get("updated_at")
+            trashed_dt = _parse_utc_datetime(trashed_at)
+            status = _normalize_token(prospect.get("status"))
+            qualification_status = _normalize_token(prospect.get("qualification_status"))
+            reason = "automated_eligibility_filter" if (
+                status == "INELIGIBLE" or qualification_status == "DISQUALIFIED"
+            ) else "legacy_rejected_or_discarded"
+            trash = {
+                "is_trashed": True,
+                "reason": reason,
+                "trashed_at": trashed_at,
+                "media_delete_after": (
+                    (trashed_dt + timedelta(days=TRASH_MEDIA_RETENTION_DAYS))
+                    .replace(microsecond=0)
+                    .isoformat()
+                    if trashed_dt
+                    else None
+                ),
+                "media_retention_days": TRASH_MEDIA_RETENTION_DAYS,
+            }
+        due_at = _parse_utc_datetime(trash.get("media_delete_after"))
+        if due_at is None or due_at > now_dt or trash.get("media_purged_at"):
+            continue
+        prospects_checked += 1
+        artifacts = connection.execute(
+            f"""
+            SELECT *
+            FROM artifacts
+            WHERE prospect_id = ?
+              AND artifact_type IN ({','.join('?' for _ in TRASH_MEDIA_ARTIFACT_TYPES)})
+            """,
+            (prospect["id"], *TRASH_MEDIA_ARTIFACT_TYPES),
+        ).fetchall()
+        purged_for_prospect = False
+        for artifact_row in artifacts:
+            artifact = _row_to_dict(artifact_row)
+            resolved_path = resolve_media_path(artifact.get("path"))
+            if resolved_path and resolved_path.is_file():
+                resolved_path.unlink()
+                files_deleted += 1
+            artifact_metadata = _metadata_dict(artifact.get("metadata_json"))
+            artifact_metadata["trash_purged_at"] = now
+            artifact_metadata["trash_purge_reason"] = "trash_retention_expired"
+            connection.execute(
+                """
+                UPDATE artifacts
+                SET status = ?,
+                    metadata_json = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    "purged",
+                    json.dumps(artifact_metadata, sort_keys=True),
+                    now,
+                    artifact["id"],
+                ),
+            )
+            artifacts_marked += 1
+            purged_for_prospect = True
+        if purged_for_prospect:
+            trash["media_purged_at"] = now
+            metadata["trash"] = trash
+            connection.execute(
+                """
+                UPDATE prospects
+                SET metadata_json = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (json.dumps(metadata, sort_keys=True), now, prospect["id"]),
+            )
+            prospects_purged += 1
+    return {
+        "prospects_checked": prospects_checked,
+        "prospects_purged": prospects_purged,
+        "files_deleted": files_deleted,
+        "artifacts_marked": artifacts_marked,
+    }
 
 
 def generate_market_key(label: str, state: str) -> str:
@@ -1419,6 +1750,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             top_markets=top_markets,
             top_niches=top_niches,
             market_summary=load_market_summary_rows(selected_market),
+            trash_summary=load_trash_summary(selected_market),
         )
 
     @app.get("/review")
@@ -1475,6 +1807,43 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             market_options=build_market_options(filters["market"]),
             niche_options=load_distinct_values("niche", market=filters["market"]),
         )
+
+    @app.get("/trash")
+    def trash_can() -> str:
+        selected_market = selected_market_from_request()
+        return render_template(
+            "dashboard/trash.html",
+            active_page="trash",
+            market_filter=market_filter_context(selected_market),
+            rows=load_trash_rows(selected_market),
+            summary=load_trash_summary(selected_market),
+            retention_days=TRASH_MEDIA_RETENTION_DAYS,
+            message=trash_message_from_code(request.args.get("result")),
+        )
+
+    @app.post("/trash/<int:prospect_id>/restore")
+    def restore_trash(prospect_id: int):
+        prospect = load_prospect(prospect_id)
+        if prospect is None:
+            abort(404)
+        selected_market = request.form.get("market", "").strip()
+        connection = get_connection()
+        restore_trashed_prospect(connection, prospect)
+        connection.commit()
+        if selected_market:
+            return redirect(url_for("trash_can", market=selected_market, result="restored"))
+        return redirect(url_for("trash_can", result="restored"))
+
+    @app.post("/trash/purge-media")
+    def purge_trash_media():
+        selected_market = request.form.get("market", "").strip()
+        connection = get_connection()
+        result = purge_due_trash_media(connection)
+        connection.commit()
+        code = f"purged:{result['prospects_purged']}:{result['files_deleted']}"
+        if selected_market:
+            return redirect(url_for("trash_can", market=selected_market, result=code))
+        return redirect(url_for("trash_can", result=code))
 
     @app.get("/crm")
     def crm() -> str:
@@ -2098,6 +2467,7 @@ def load_stage_counts(market: str = "") -> list[dict[str, Any]]:
     clauses = ["1 = 1"]
     params: list[Any] = []
     append_market_filter(clauses, params, market)
+    append_active_prospect_filter(clauses, params)
     rows = get_connection().execute(
         f"""
         SELECT id, status, qualification_status, audit_data_status,
@@ -2134,9 +2504,11 @@ def load_pipeline_counts(market: str = "") -> list[dict[str, Any]]:
     market_clause, market_params = market_where_clause(market)
     for bucket in PIPELINE_COUNT_BUCKETS:
         clauses = [f"({count_queries[bucket]})"]
-        params = list(market_params)
+        params: list[Any] = []
         if market_clause != "1 = 1":
             clauses.append(market_clause)
+            params.extend(market_params)
+        append_active_prospect_filter(clauses, params)
         row = connection.execute(
             f"SELECT COUNT(*) AS count FROM prospects WHERE {' AND '.join(clauses)}",
             params,
@@ -2163,6 +2535,7 @@ def load_run_counts(market: str = "") -> list[dict[str, Any]]:
     clauses = ["1 = 1"]
     params: list[Any] = []
     append_market_filter(clauses, params, market)
+    append_active_prospect_filter(clauses, params)
     rows = get_connection().execute(
         f"""
         SELECT id, status, qualification_status, audit_data_status,
@@ -2221,6 +2594,7 @@ def load_run_recommended_action(market: str = "", niches: list[str] | None = Non
         placeholders = ", ".join("?" for _ in niches)
         base_clauses.append(f"niche IN ({placeholders})")
         base_params.extend(niches)
+    append_job_protected_filter(base_clauses, base_params)
 
     def count_matching(extra_clauses: list[str], extra_params: list[Any] | None = None) -> int:
         clauses = list(base_clauses) + extra_clauses
@@ -2317,6 +2691,7 @@ def load_review_queue(market: str = "") -> list[dict[str, Any]]:
     ]
     params: list[Any] = []
     append_market_filter(clauses, params, market)
+    append_active_prospect_filter(clauses, params)
     rows = get_connection().execute(
         f"""
         SELECT *
@@ -2345,6 +2720,7 @@ def load_group_counts(column: str, limit: int = 8, market: str = "") -> list[dic
     clauses = [f"{column} IS NOT NULL", f"{column} <> ''"]
     params: list[Any] = []
     append_market_filter(clauses, params, market)
+    append_active_prospect_filter(clauses, params)
     params.append(limit)
     rows = get_connection().execute(
         f"""
@@ -2367,6 +2743,7 @@ def load_distinct_values(column: str, market: str = "") -> list[str]:
     params: list[Any] = []
     if column != "market":
         append_market_filter(clauses, params, market)
+    append_active_prospect_filter(clauses, params)
     rows = get_connection().execute(
         f"""
         SELECT DISTINCT {column} AS value
@@ -2433,6 +2810,7 @@ def load_market_summary_counts(market: str = "") -> dict[str, dict[str, int]]:
     clauses = ["1 = 1"]
     params: list[Any] = []
     append_market_filter(clauses, params, market)
+    append_active_prospect_filter(clauses, params)
     rows = get_connection().execute(
         f"""
         SELECT market, status, qualification_status, audit_data_status,
@@ -2502,12 +2880,17 @@ def load_market_summary_rows(market: str = "") -> list[dict[str, Any]]:
 
 def load_stage_counts_by_market() -> dict[str, dict[str, Any]]:
     configured_keys_set = set(configured_market_keys())
+    clauses = ["1 = 1"]
+    params: list[Any] = []
+    append_active_prospect_filter(clauses, params)
     rows = get_connection().execute(
         """
         SELECT market, status, qualification_status, audit_data_status,
                human_review_status, human_review_decision, next_action
         FROM prospects
-        """
+        WHERE {where_clause}
+        """.format(where_clause=" AND ".join(clauses)),
+        params,
     ).fetchall()
     counts_by_market: dict[str, dict[str, Any]] = {}
     for row in rows:
@@ -2555,6 +2938,7 @@ def load_market_manager_rows() -> list[dict[str, Any]]:
 def load_leads(filters: dict[str, Any]) -> list[dict[str, Any]]:
     clauses = ["1 = 1"]
     params: list[Any] = []
+    append_active_prospect_filter(clauses, params)
 
     if filters.get("market"):
         append_market_filter(clauses, params, filters["market"])
@@ -2601,6 +2985,70 @@ def load_leads(filters: dict[str, Any]) -> list[dict[str, Any]]:
     return rows[: filters.get("limit", DEFAULT_LIMIT)]
 
 
+def _enrich_trash_row(row: dict[str, Any]) -> dict[str, Any]:
+    row["pipeline_stage"] = compute_pipeline_stage(row)
+    metadata = _metadata_dict(row.get("metadata_json"))
+    trash = metadata.get("trash") if isinstance(metadata.get("trash"), dict) else {}
+    if not trash:
+        status = _normalize_token(row.get("status"))
+        qualification_status = _normalize_token(row.get("qualification_status"))
+        reason = "automated_eligibility_filter" if (
+            status == "INELIGIBLE" or qualification_status == "DISQUALIFIED"
+        ) else "legacy_rejected_or_discarded"
+        trash = {
+            "is_trashed": True,
+            "reason": reason,
+            "trashed_at": row.get("human_reviewed_at") or row.get("updated_at"),
+            "media_retention_days": TRASH_MEDIA_RETENTION_DAYS,
+        }
+        trashed_dt = _parse_utc_datetime(trash.get("trashed_at"))
+        trash["media_delete_after"] = (
+            (trashed_dt + timedelta(days=TRASH_MEDIA_RETENTION_DAYS)).replace(microsecond=0).isoformat()
+            if trashed_dt
+            else None
+        )
+    row["metadata"] = metadata
+    row["trash"] = trash
+    row["trash_reason"] = trash.get("reason") or "rejected_or_discarded"
+    row["trash_trashed_at"] = trash.get("trashed_at") or row.get("updated_at")
+    row["trash_media_delete_after"] = trash.get("media_delete_after")
+    row["trash_media_due_label"] = _trash_due_label(trash.get("media_delete_after"))
+    row["trash_media_purged_at"] = trash.get("media_purged_at")
+    row["trash_can_purge"] = bool(
+        _parse_utc_datetime(trash.get("media_delete_after"))
+        and not trash.get("media_purged_at")
+        and (_parse_utc_datetime(trash.get("media_delete_after")) or datetime.max.replace(tzinfo=timezone.utc))
+        <= datetime.now(timezone.utc)
+    )
+    return row
+
+
+def load_trash_rows(market: str = "") -> list[dict[str, Any]]:
+    clauses = ["1 = 1"]
+    params: list[Any] = []
+    append_trash_prospect_filter(clauses, params)
+    append_market_filter(clauses, params, market)
+    rows = get_connection().execute(
+        f"""
+        SELECT *
+        FROM prospects
+        WHERE {" AND ".join(clauses)}
+        ORDER BY updated_at DESC, id DESC
+        """,
+        params,
+    ).fetchall()
+    return [_enrich_trash_row(_row_to_dict(row)) for row in rows]
+
+
+def load_trash_summary(market: str = "") -> dict[str, int]:
+    rows = load_trash_rows(market)
+    return {
+        "count": len(rows),
+        "media_due": sum(1 for row in rows if row.get("trash_can_purge")),
+        "media_purged": sum(1 for row in rows if row.get("trash_media_purged_at")),
+    }
+
+
 def load_crm_columns(market: str = "", recent_limit: int = 8) -> list[dict[str, Any]]:
     prospects = load_crm_prospects(market)
     columns = []
@@ -2637,6 +3085,7 @@ def load_crm_prospects(market: str = "") -> list[dict[str, Any]]:
     clauses = ["1 = 1"]
     params: list[Any] = []
     append_market_filter(clauses, params, market)
+    append_active_prospect_filter(clauses, params)
     rows = get_connection().execute(
         f"""
         SELECT {", ".join(LEADS_COLUMNS)}, updated_at
@@ -2853,6 +3302,7 @@ def outbound_where_clause(filters: dict[str, str]) -> tuple[str, list[Any]]:
     clauses = ["1 = 1"]
     params: list[Any] = []
     append_market_filter(clauses, params, filters.get("market", ""))
+    append_active_prospect_filter(clauses, params)
     if filters.get("niche"):
         clauses.append("niche = ?")
         params.append(filters["niche"])
@@ -3699,6 +4149,8 @@ def load_send_queue_rows(*, limit: int) -> list[dict[str, Any]]:
         LEFT JOIN artifacts pp ON pp.id = q.public_packet_artifact_id
         WHERE q.step = ?
           AND q.campaign = ?
+          AND UPPER(COALESCE(p.status, '')) NOT IN (?, ?, ?)
+          AND UPPER(COALESCE(p.qualification_status, '')) NOT IN (?)
         ORDER BY
             CASE LOWER(q.status)
               WHEN 'queued' THEN 0
@@ -3711,7 +4163,13 @@ def load_send_queue_rows(*, limit: int) -> list[dict[str, Any]]:
             q.id ASC
         LIMIT ?
         """,
-        (OUTBOUND_DEFAULT_STEP, OUTBOUND_DEFAULT_CAMPAIGN, limit),
+        (
+            OUTBOUND_DEFAULT_STEP,
+            OUTBOUND_DEFAULT_CAMPAIGN,
+            *TRASH_STATUSES,
+            *TRASH_QUALIFICATION_STATUSES,
+            limit,
+        ),
     ).fetchall()
     result = []
     for row in rows:
@@ -4845,6 +5303,22 @@ def review_queue_message_from_code(code: str | None) -> dict[str, str] | None:
     return messages.get(code or "")
 
 
+def trash_message_from_code(code: str | None) -> dict[str, str] | None:
+    if not code:
+        return None
+    if code == "restored":
+        return {"status": "success", "message": "Lead restored from trash."}
+    if code.startswith("purged:"):
+        parts = code.split(":")
+        prospects = parts[1] if len(parts) > 1 else "0"
+        files = parts[2] if len(parts) > 2 else "0"
+        return {
+            "status": "success",
+            "message": f"Purged due screenshot media for {prospects} leads ({files} files removed).",
+        }
+    return None
+
+
 def parse_review_score(value: str | None) -> int | None:
     if value is None or value.strip() == "":
         return None
@@ -4868,14 +5342,15 @@ def apply_review_decision(
     now = utc_now()
     current = connection.execute(
         """
-        SELECT status, next_action
+        SELECT *
         FROM prospects
         WHERE id = ?
         """,
         (prospect_id,),
     ).fetchone()
-    old_status = current["status"] if current else None
-    old_next_action = current["next_action"] if current else None
+    current_prospect = _row_to_dict(current) if current else {}
+    old_status = current_prospect.get("status")
+    old_next_action = current_prospect.get("next_action")
     if action == "approve":
         review_status = "APPROVED"
         review_decision = "APPROVED"
@@ -4935,6 +5410,15 @@ def apply_review_decision(
                 "human_review_score": score,
             },
         )
+    if action == "reject":
+        mark_prospect_trashed(
+            connection,
+            prospect_id=prospect_id,
+            reason="manual_review_reject",
+            previous=current_prospect,
+        )
+    elif action in {"approve", "hold"}:
+        clear_trash_metadata(connection, prospect_id)
 
 
 def parse_optional_int(value: str | None) -> int | None:
@@ -4984,6 +5468,15 @@ def apply_crm_stage_change(
         note=note,
         metadata={"source": "crm_stage_form"},
     )
+    if new_status == "DISCARDED":
+        mark_prospect_trashed(
+            connection,
+            prospect_id=prospect["id"],
+            reason="crm_stage_discarded",
+            previous=prospect,
+        )
+    elif new_status not in TRASH_STATUSES:
+        clear_trash_metadata(connection, prospect["id"])
 
 
 def insert_crm_stage_event(

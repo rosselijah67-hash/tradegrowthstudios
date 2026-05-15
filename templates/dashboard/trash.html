@@ -1,0 +1,102 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Trash - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <h1>Trash</h1>
+    <p>{{ summary.count }} rejected, discarded, or ineligible leads hidden from normal CRM pages</p>
+  </div>
+  <a class="button" href="{{ url_for('overview', market=market_filter.selected) if market_filter.selected else url_for('overview') }}">Back to Overview</a>
+</section>
+
+{% if message %}
+  <div class="notice {{ message.status }}">{{ message.message }}</div>
+{% endif %}
+
+<form class="market-filter-form" method="get" action="{{ url_for('trash_can') }}">
+  <label>
+    <span>Market</span>
+    <select name="market">
+      <option value="">All markets</option>
+      {% for option in market_filter.options %}
+        <option value="{{ option.value }}" {% if market_filter.selected == option.value %}selected{% endif %}>{{ option.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <div class="filter-actions">
+    <button class="button primary" type="submit">Apply</button>
+    <a class="button" href="{{ url_for('trash_can') }}">Reset</a>
+  </div>
+</form>
+
+<section class="panel trash-toolbar">
+  <div>
+    <h2>Media Cleanup</h2>
+    <p>Newly deleted leads keep screenshots for {{ retention_days }} days. After that, screenshots can be purged while the lead row stays saved for dedupe.</p>
+  </div>
+  <form method="post" action="{{ url_for('purge_trash_media') }}">
+    <input type="hidden" name="market" value="{{ market_filter.selected }}">
+    <button class="button danger" type="submit" {% if summary.media_due == 0 %}disabled{% endif %}>Purge Due Media</button>
+  </form>
+</section>
+
+<section class="table-panel">
+  <div class="table-wrap">
+    <table class="compact-table trash-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Business</th>
+          <th>Market</th>
+          <th>Niche</th>
+          <th>Website</th>
+          <th>Reason</th>
+          <th>Trashed</th>
+          <th>Media purge</th>
+          <th>Stage</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+          <tr>
+            <td>{{ row.id }}</td>
+            <td class="business-cell">{{ row.business_name }}</td>
+            <td>{{ row.market or "" }}</td>
+            <td>{{ row.niche or "" }}</td>
+            <td>
+              {% set href = row.website_url|external_href %}
+              {% if href %}
+                <a class="website-pill" href="{{ href }}" target="_blank" rel="noopener noreferrer">Website</a>
+              {% endif %}
+            </td>
+            <td>{{ row.trash_reason|pretty_label }}</td>
+            <td>{{ row.trash_trashed_at or "" }}</td>
+            <td>
+              {% if row.trash_media_purged_at %}
+                <span class="pill status-pass">Purged</span>
+              {% else %}
+                <span class="pill {{ 'status-warn' if row.trash_can_purge else '' }}">{{ row.trash_media_due_label }}</span>
+              {% endif %}
+            </td>
+            <td><span class="pill">{{ row.pipeline_stage|pretty_label }}</span></td>
+            <td class="table-actions">
+              <a class="table-action" href="{{ url_for('case_file', prospect_id=row.id) }}">Case</a>
+              <form method="post" action="{{ url_for('restore_trash', prospect_id=row.id) }}">
+                <input type="hidden" name="market" value="{{ market_filter.selected }}">
+                <button class="button primary" type="submit">Revive</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="10" class="empty">No rejected or discarded leads are in the trash.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}
