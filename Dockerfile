@@ -13,6 +13,7 @@ COPY src ./src
 COPY static ./static
 COPY templates ./templates
 COPY config ./config
+COPY screenshots ./screenshots
 COPY scripts/docker-entrypoint.sh ./scripts/docker-entrypoint.sh
 COPY README.md README_OPERATOR.md ./
 
