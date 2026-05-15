@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>{{ business_name }} - Homepage Concept</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #14212b;
+      --muted: #5e6d78;
+      --line: #dae3ea;
+      --soft: #f6f9fb;
+      --accent: #0f766e;
+      --accent-dark: #115e59;
+      --gold: #b7791f;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      color: var(--ink);
+      background: #ffffff;
+      line-height: 1.45;
+    }
+    a { color: inherit; }
+    .wrap { max-width: 1140px; margin: 0 auto; padding: 0 18px; }
+    .nav {
+      border-bottom: 1px solid var(--line);
+      background: #ffffff;
+    }
+    .nav .wrap {
+      min-height: 72px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+    .brand { font-size: 22px; font-weight: 700; }
+    .nav-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 44px;
+      padding: 0 16px;
+      border-radius: 6px;
+      border: 1px solid var(--accent);
+      text-decoration: none;
+      font-weight: 700;
+    }
+    .btn.primary { background: var(--accent); color: #ffffff; }
+    .btn.secondary { color: var(--accent-dark); background: #ffffff; }
+    .hero {
+      background: linear-gradient(90deg, rgba(20,33,43,0.9), rgba(20,33,43,0.68)), var(--soft);
+      color: #ffffff;
+      padding: 72px 0;
+    }
+    .hero-grid { display: grid; grid-template-columns: 1fr 0.82fr; gap: 34px; align-items: center; }
+    h1 { margin: 0 0 14px; font-size: clamp(38px, 6vw, 66px); line-height: 0.98; }
+    h2 { margin: 0 0 16px; font-size: clamp(26px, 4vw, 38px); line-height: 1.08; }
+    h3 { margin: 0 0 8px; font-size: 18px; }
+    p { margin: 0 0 14px; }
+    .hero p { color: #d8eef0; font-size: 18px; max-width: 660px; }
+    .hero-card {
+      border: 1px solid rgba(255,255,255,0.24);
+      border-radius: 8px;
+      padding: 22px;
+      background: rgba(255,255,255,0.08);
+    }
+    section { padding: 56px 0; }
+    .soft { background: var(--soft); }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+    .tile {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 20px;
+      background: #ffffff;
+      min-height: 130px;
+    }
+    .placeholder {
+      border: 1px dashed #b6c4cf;
+      border-radius: 8px;
+      padding: 18px;
+      color: var(--muted);
+      background: #ffffff;
+    }
+    .quote {
+      border-radius: 8px;
+      background: #0f2f2d;
+      color: #ffffff;
+      padding: 28px;
+    }
+    .quote p { color: #d5eeeb; }
+    footer {
+      padding: 24px 0;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    @media (max-width: 820px) {
+      .nav .wrap, .hero-grid, .grid-2, .grid-3 { grid-template-columns: 1fr; display: grid; }
+      .nav-actions { width: 100%; }
+      .btn { width: 100%; }
+      .hero { padding: 50px 0; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="nav">
+    <div class="wrap">
+      <div class="brand">{{ business_name }}</div>
+      <div class="nav-actions">
+        {% if phone_display %}<a class="btn secondary" href="tel:{{ phone_tel }}">Call {{ phone_display }}</a>{% endif %}
+        <a class="btn primary" href="#quote">Request Estimate</a>
+      </div>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <h1>{{ hero_headline }}</h1>
+        <p>{{ hero_subhead }}</p>
+        <div class="nav-actions">
+          {% if phone_display %}<a class="btn primary" href="tel:{{ phone_tel }}">Call Now</a>{% endif %}
+          <a class="btn secondary" href="#quote">Request Estimate</a>
+        </div>
+      </div>
+      <div class="hero-card">
+        <h3>Homepage concept focus</h3>
+        <p>Clear service positioning, stronger mobile calls to action, visible estimate path, and trust elements ready for verified proof.</p>
+      </div>
+    </div>
+  </header>
+
+  <section>
+    <div class="wrap">
+      <h2>{{ niche_label }} Services</h2>
+      <div class="grid-3">
+        {% for service in service_items %}
+        <div class="tile">
+          <h3>{{ service }}</h3>
+          <p>Placeholder section for verified service details and customer-focused benefits.</p>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+
+  <section class="soft">
+    <div class="wrap grid-2">
+      <div>
+        <h2>Service Area</h2>
+        <p>{{ service_area_text }}</p>
+      </div>
+      <div class="placeholder">
+        Verified city/service-area proof can be added here after review.
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="wrap">
+      <h2>Trust Signals To Verify</h2>
+      <div class="grid-3">
+        <div class="placeholder">License or registration placeholder</div>
+        <div class="placeholder">Insurance or warranty placeholder</div>
+        <div class="placeholder">Review, project, or certification placeholder</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="quote" class="soft">
+    <div class="wrap quote">
+      <h2>Request An Estimate</h2>
+      <p>Short form placeholder: name, phone, email, service needed, and project location.</p>
+      {% if phone_display %}<p><strong>Phone CTA:</strong> {{ phone_display }}</p>{% endif %}
+    </div>
+  </section>
+
+  <footer>
+    <div class="wrap">
+      Private concept draft for discussion. Not affiliated with or published by the business.
+    </div>
+  </footer>
+</body>
+</html>

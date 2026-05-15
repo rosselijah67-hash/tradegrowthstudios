@@ -1,0 +1,123 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Markets - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <h1>Markets</h1>
+    <p>Location configuration from config/markets.yaml. Adding a market saves config only; it does not call Places.</p>
+  </div>
+</section>
+
+{% if message %}
+  <div class="notice {{ message.status }}">{{ message.message }}</div>
+{% endif %}
+
+<section class="market-manager-grid">
+  <form class="panel market-form" method="post" action="{{ url_for('add_market') }}">
+    <div class="panel-header">
+      <h2>Add Market</h2>
+    </div>
+
+    <label>
+      <span>Market key</span>
+      <input name="market_key" pattern="[a-z0-9_]+" placeholder="auto-generated if blank">
+    </label>
+
+    <label>
+      <span>Label</span>
+      <input name="label" required placeholder="Austin, TX">
+    </label>
+
+    <label>
+      <span>State</span>
+      <input name="state" required maxlength="2" pattern="[A-Za-z]{2}" placeholder="TX">
+    </label>
+
+    <label class="check-row">
+      <input type="checkbox" name="priority" value="1">
+      <span>Priority market</span>
+    </label>
+
+    <label class="market-cities-field">
+      <span>Included cities</span>
+      <textarea name="included_cities" required rows="6" placeholder="Austin&#10;Round Rock&#10;Cedar Park"></textarea>
+    </label>
+
+    <label class="market-notes-field">
+      <span>Notes</span>
+      <textarea name="notes" rows="3"></textarea>
+    </label>
+
+    <button class="button primary" type="submit">Add Market</button>
+  </form>
+
+  <section class="table-panel market-table-panel">
+    <div class="panel-header">
+      <div>
+        <h2>Configured Markets</h2>
+        <p>To edit or remove a market, update config/markets.yaml directly. Dashboard adds create a backup first and may reformat YAML comments.</p>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="compact-table">
+        <thead>
+          <tr>
+            <th>Key</th>
+            <th>Label</th>
+            <th>State</th>
+            <th>Priority</th>
+            <th>Cities</th>
+            <th>Total</th>
+            <th>Pending</th>
+            <th>Approved</th>
+            <th>Outreach Sent</th>
+            <th>Contact Made</th>
+            <th>Discarded/Ineligible</th>
+            <th>Stage Detail</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for market in markets %}
+            <tr>
+              <td><code>{{ market.key }}</code></td>
+              <td>{{ market.label }}</td>
+              <td>{{ market.state }}</td>
+              <td>{{ "Yes" if market.priority else "No" }}</td>
+              <td>
+                <div class="market-cities">
+                  {% for city in market.included_cities %}
+                    <span>{{ city }}</span>
+                  {% else %}
+                    <span class="empty">No cities listed</span>
+                  {% endfor %}
+                </div>
+              </td>
+              <td>{{ market.prospect_count }}</td>
+              <td>{{ market.summary.pending_review }}</td>
+              <td>{{ market.summary.approved_for_outreach }}</td>
+              <td>{{ market.summary.outreach_sent }}</td>
+              <td>{{ market.summary.contact_made }}</td>
+              <td>{{ market.summary.discarded_ineligible }}</td>
+              <td>
+                <div class="stage-chip-list">
+                  {% for item in market.stage_counts %}
+                    <span>{{ item.stage|pretty_label }}: {{ item.count }}</span>
+                  {% else %}
+                    <span class="empty">No prospects</span>
+                  {% endfor %}
+                </div>
+              </td>
+            </tr>
+          {% else %}
+            <tr>
+              <td colspan="12" class="empty">No markets configured yet.</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</section>
+{% endblock %}

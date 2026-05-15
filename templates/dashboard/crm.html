@@ -1,0 +1,53 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}CRM - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <h1>CRM</h1>
+    <p>Lead folders and status management. No outreach is sent from this page.</p>
+  </div>
+</section>
+
+<form class="market-filter-form" method="get" action="{{ url_for('crm') }}">
+  <label>
+    <span>Market</span>
+    <select name="market">
+      <option value="">All markets</option>
+      {% for option in market_filter.options %}
+        <option value="{{ option.value }}" {% if market_filter.selected == option.value %}selected{% endif %}>{{ option.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <div class="filter-actions">
+    <button class="button primary" type="submit">Apply</button>
+    <a class="button" href="{{ url_for('crm') }}">Reset</a>
+  </div>
+</form>
+
+<section class="crm-board">
+  {% for column in columns %}
+    <article class="panel crm-column">
+      <a class="crm-column-header" href="{{ url_for('crm_stage', stage=column.stage, market=market_filter.selected) if market_filter.selected else url_for('crm_stage', stage=column.stage) }}">
+        <span>{{ column.label }}</span>
+        <strong>{{ column.count }}</strong>
+      </a>
+      <div class="crm-card-list">
+        {% for prospect in column.prospects %}
+          <a class="crm-card" href="{{ url_for('case_file', prospect_id=prospect.id) }}">
+            <strong>{{ prospect.business_name }}</strong>
+            <span>{{ prospect.market or "No market" }}{% if prospect.niche %} / {{ prospect.niche }}{% endif %}</span>
+            <small>{{ prospect.next_action or "No next action" }}</small>
+          </a>
+        {% else %}
+          <p class="empty">No prospects in this folder.</p>
+        {% endfor %}
+      </div>
+      {% if column.count > column.prospects|length %}
+        <a class="table-action" href="{{ url_for('crm_stage', stage=column.stage, market=market_filter.selected) if market_filter.selected else url_for('crm_stage', stage=column.stage) }}">View all</a>
+      {% endif %}
+    </article>
+  {% endfor %}
+</section>
+{% endblock %}

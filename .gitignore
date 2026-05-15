@@ -1,0 +1,17 @@
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+*.zip
+*.bak.*
+
+data/*.db
+data/*.db-*
+logs/*.log
+artifacts/
+screenshots/
+runs/
+public_outreach/
+backups/

@@ -1,0 +1,124 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Leads - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <h1>Leads</h1>
+    <p>{{ leads|length }} rows shown</p>
+  </div>
+</section>
+
+<form class="filters" method="get" action="{{ url_for('leads') }}">
+  <label>
+    <span>Stage</span>
+    <select name="stage">
+      <option value="">All stages</option>
+      {% for stage in stage_options %}
+        <option value="{{ stage }}" {% if filters.stage == stage %}selected{% endif %}>{{ stage|pretty_label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    <span>Market</span>
+    <select name="market">
+      <option value="">All markets</option>
+      {% for market in market_options %}
+        <option value="{{ market.value }}" {% if filters.market == market.value %}selected{% endif %}>{{ market.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    <span>Niche</span>
+    <select name="niche">
+      <option value="">All niches</option>
+      {% for niche in niche_options %}
+        <option value="{{ niche }}" {% if filters.niche == niche %}selected{% endif %}>{{ niche }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    <span>Search</span>
+    <input type="search" name="q" value="{{ filters.q }}" placeholder="Business, site, phone">
+  </label>
+  <label>
+    <span>Limit</span>
+    <input type="number" name="limit" min="1" max="1000" value="{{ filters.limit }}">
+  </label>
+  <div class="filter-actions">
+    <button class="button primary" type="submit">Apply</button>
+    <a class="button" href="{{ url_for('leads') }}">Reset</a>
+  </div>
+</form>
+
+<section class="table-panel">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Business</th>
+          <th>Market</th>
+          <th>Niche</th>
+          <th>Website</th>
+          <th>Phone</th>
+          <th>Rating</th>
+          <th>Reviews</th>
+          <th>Qualification</th>
+          <th>Audit</th>
+          <th>Review Status</th>
+          <th>Decision</th>
+          <th>Close</th>
+          <th>Pain</th>
+          <th>Status</th>
+          <th>Next Action</th>
+          <th>Exclusion</th>
+          <th>Stage</th>
+          <th>Case</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for lead in leads %}
+          <tr>
+            <td>{{ lead.id }}</td>
+            <td class="business-cell">{{ lead.business_name }}</td>
+            <td>{{ lead.market or "" }}</td>
+            <td>{{ lead.niche or "" }}</td>
+            <td>
+              {% set href = lead.website_url|external_href %}
+              {% if href %}
+                <a href="{{ href }}" target="_blank" rel="noopener noreferrer">{{ lead.website_url }}</a>
+              {% endif %}
+            </td>
+            <td>{{ lead.phone or "" }}</td>
+            <td>{{ lead.rating if lead.rating is not none else "" }}</td>
+            <td>{{ lead.user_rating_count if lead.user_rating_count is not none else "" }}</td>
+            <td>{{ lead.qualification_status or "" }}</td>
+            <td>{{ lead.audit_data_status or "" }}</td>
+            <td>{{ lead.human_review_status or "" }}</td>
+            <td>{{ lead.human_review_decision or "" }}</td>
+            <td>{{ lead.expected_close_score }}</td>
+            <td>{{ lead.website_pain_score }}</td>
+            <td>{{ lead.status or "" }}</td>
+            <td>{{ lead.next_action or "" }}</td>
+            <td>
+              {% if lead.franchise_exclusion and lead.franchise_exclusion.is_excluded %}
+                <span class="pill {{ 'status-fail' if lead.franchise_exclusion.is_hard_exclude else 'status-warn' }}">
+                  {{ "Hard" if lead.franchise_exclusion.is_hard_exclude else "Soft" }}
+                </span>
+              {% endif %}
+            </td>
+            <td><span class="pill">{{ lead.pipeline_stage|pretty_label }}</span></td>
+            <td><a class="table-action" href="{{ url_for('case_file', prospect_id=lead.id) }}">Open</a></td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="19" class="empty">No leads match the current filters.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

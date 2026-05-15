@@ -1,0 +1,162 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}{{ job.job_key }} - Job{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <a class="back-link" href="{{ url_for('jobs') }}">Back to jobs</a>
+    <h1>{{ job.job_type|pretty_label }}</h1>
+    <p>{{ job.job_key }}</p>
+  </div>
+  <a class="button" href="{{ url_for('job_status', job_key=job.job_key) }}">JSON Status</a>
+</section>
+
+<section class="summary-grid">
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Status</h2>
+      <span class="pill" id="job-status-pill">{{ job.status|pretty_label }}</span>
+    </div>
+    <dl class="detail-list">
+      <div><dt>Market</dt><dd>{{ job.market or "All" }}</dd></div>
+      <div><dt>Niche</dt><dd>{{ job.niche or "All" }}</dd></div>
+      <div><dt>Limit</dt><dd>{{ job.limit_count or "" }}</dd></div>
+      <div><dt>Dry Run</dt><dd>{{ "Yes" if job.dry_run else "No" }}</dd></div>
+      <div><dt>Started</dt><dd id="job-started-at">{{ job.started_at or "" }}</dd></div>
+      <div><dt>Finished</dt><dd id="job-finished-at">{{ job.finished_at or "" }}</dd></div>
+      <div id="job-error-row" {% if job.metadata.error_summary is not defined %}hidden{% endif %}>
+        <dt>Error</dt>
+        <dd id="job-error-summary">{{ job.metadata.error_summary if job.metadata.error_summary is defined else "" }}</dd>
+      </div>
+    </dl>
+    {% if job.status == "succeeded" and job.market %}
+      <p class="run-review-link">
+        <a class="button" href="{{ url_for('review_queue', market=job.market) }}">Open Review Queue for this market</a>
+      </p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Command</h2>
+    </div>
+    <pre class="job-command">{{ job.command|tojson(indent=2) }}</pre>
+  </div>
+</section>
+
+{% if job.metadata.steps is defined and job.metadata.steps %}
+  <section class="table-panel">
+    <div class="panel-header">
+      <h2>Pipeline Steps</h2>
+    </div>
+    <div class="table-wrap">
+      <table class="compact-table">
+        <thead>
+          <tr>
+            <th>Step</th>
+            <th>Type</th>
+            <th>Command</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for step in job.metadata.steps %}
+            <tr>
+              <td>{{ loop.index }}. {{ step.label }}</td>
+              <td>{{ step.job_type|pretty_label }}</td>
+              <td><code>{{ step.command|tojson }}</code></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endif %}
+
+<section class="panel job-summary-panel" id="job-summary-panel" {% if not job_summary.rows %}hidden{% endif %}>
+  <div class="panel-header">
+    <h2>Result Summary</h2>
+  </div>
+  <div class="job-summary-grid" id="job-summary-grid">
+    {% for item in job_summary.rows %}
+      <div>
+        <span>{{ item.label }}</span>
+        <strong>{{ item.value }}</strong>
+      </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>Log</h2>
+  </div>
+  <pre class="job-log" id="job-log">{{ log_text or "Log file has not been written yet." }}</pre>
+</section>
+
+{% if job.status in ["queued", "running"] %}
+<script>
+(() => {
+  const statusUrl = {{ url_for('job_status', job_key=job.job_key)|tojson }};
+  const terminalStatuses = new Set(["succeeded", "failed", "cancelled", "stale"]);
+  const statusPill = document.getElementById("job-status-pill");
+  const startedAt = document.getElementById("job-started-at");
+  const finishedAt = document.getElementById("job-finished-at");
+  const errorRow = document.getElementById("job-error-row");
+  const errorSummary = document.getElementById("job-error-summary");
+  const summaryPanel = document.getElementById("job-summary-panel");
+  const summaryGrid = document.getElementById("job-summary-grid");
+  const log = document.getElementById("job-log");
+
+  const renderSummary = (summary) => {
+    const rows = summary && summary.rows ? summary.rows : [];
+    if (!rows.length) {
+      return;
+    }
+    summaryGrid.replaceChildren();
+    rows.forEach((item) => {
+      const cell = document.createElement("div");
+      const label = document.createElement("span");
+      const value = document.createElement("strong");
+      label.textContent = item.label;
+      value.textContent = item.value;
+      cell.append(label, value);
+      summaryGrid.appendChild(cell);
+    });
+    summaryPanel.hidden = false;
+  };
+
+  const poll = async () => {
+    try {
+      const response = await fetch(statusUrl, { headers: { "Accept": "application/json" } });
+      if (!response.ok) {
+        return true;
+      }
+      const job = await response.json();
+      statusPill.textContent = job.status_label || job.status;
+      startedAt.textContent = job.started_at || "";
+      finishedAt.textContent = job.finished_at || "";
+      if (job.error_summary) {
+        errorSummary.textContent = job.error_summary;
+        errorRow.hidden = false;
+      }
+      if (job.log_tail) {
+        log.textContent = job.log_tail;
+      }
+      renderSummary(job.summary);
+      return !terminalStatuses.has(job.status);
+    } catch (_error) {
+      return true;
+    }
+  };
+
+  const interval = window.setInterval(async () => {
+    if (!(await poll())) {
+      window.clearInterval(interval);
+    }
+  }, 1500);
+  poll();
+})();
+</script>
+{% endif %}
+{% endblock %}

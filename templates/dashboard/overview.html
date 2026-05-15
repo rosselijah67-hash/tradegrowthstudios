@@ -1,0 +1,115 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Overview - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <h1>Overview</h1>
+    <p>{{ total_prospects }} prospects in {{ db_path }}</p>
+  </div>
+  <a class="button primary" href="{{ url_for('leads', market=market_filter.selected) if market_filter.selected else url_for('leads') }}">Open Leads</a>
+</section>
+
+<form class="market-filter-form" method="get" action="{{ url_for('overview') }}">
+  <label>
+    <span>Market</span>
+    <select name="market">
+      <option value="">All markets</option>
+      {% for option in market_filter.options %}
+        <option value="{{ option.value }}" {% if market_filter.selected == option.value %}selected{% endif %}>{{ option.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <div class="filter-actions">
+    <button class="button primary" type="submit">Apply</button>
+    <a class="button" href="{{ url_for('overview') }}">Reset</a>
+  </div>
+</form>
+
+<section class="stage-grid" aria-label="Pipeline stage counts">
+  {% for item in stage_counts %}
+    <a class="stage-card" href="{{ url_for('leads', stage=item.stage, market=market_filter.selected) if market_filter.selected else url_for('leads', stage=item.stage) }}">
+      <span class="stage-count">{{ item.count }}</span>
+      <span class="stage-label">{{ item.stage|pretty_label }}</span>
+    </a>
+  {% endfor %}
+</section>
+
+<section class="table-panel market-summary-panel">
+  <div class="panel-header">
+    <h2>Market Summary</h2>
+  </div>
+  <div class="table-wrap">
+    <table class="compact-table">
+      <thead>
+        <tr>
+          <th>Market</th>
+          <th>Total Leads</th>
+          <th>Eligible</th>
+          <th>Pending Review</th>
+          <th>Approved</th>
+          <th>Outreach Sent</th>
+          <th>Contact Made</th>
+          <th>Discarded/Ineligible</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for market in market_summary %}
+          <tr>
+            <td>
+              <a class="table-action" href="{{ url_for('leads', market=market.key) }}">{{ market.label }}</a>
+              {% if market.state %}<small>{{ market.state }}</small>{% endif %}
+            </td>
+            <td>{{ market.total }}</td>
+            <td>{{ market.eligible }}</td>
+            <td>{{ market.pending_review }}</td>
+            <td>{{ market.approved_for_outreach }}</td>
+            <td>{{ market.outreach_sent }}</td>
+            <td>{{ market.contact_made }}</td>
+            <td>{{ market.discarded_ineligible }}</td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="8" class="empty">No market counts found.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="summary-grid">
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Markets</h2>
+    </div>
+    <div class="mini-table">
+      {% for item in top_markets %}
+        <a href="{{ url_for('leads', market=item.label) }}">
+          <span>{{ item.label }}</span>
+          <strong>{{ item.count }}</strong>
+        </a>
+      {% else %}
+        <p class="empty">No markets found.</p>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Niches</h2>
+    </div>
+    <div class="mini-table">
+      {% for item in top_niches %}
+        <a href="{{ url_for('leads', niche=item.label) }}">
+          <span>{{ item.label }}</span>
+          <strong>{{ item.count }}</strong>
+        </a>
+      {% else %}
+        <p class="empty">No niches found.</p>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endblock %}

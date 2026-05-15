@@ -1,0 +1,38 @@
+defaults:
+  from_name: Local Growth Audit
+  business_name:
+  reply_to_env: OUTREACH_REPLY_TO_EMAIL
+  cooldown_days: 14
+  max_emails_per_run: 25
+  physical_address:
+  unsubscribe_email:
+  unsubscribe_instruction:
+  daily_cap: 10
+  attach_screenshots_default: false
+sender:
+  name:
+  company: "Trade Growth Studio"
+  title:
+copy:
+  default_style: "owner_friendly"
+  default_variant_index: 0
+  include_public_packet_in_draft: true
+  step1_max_issues: 4
+  banned_phrases:
+    - "case file"
+    - "audit notes"
+    - "our system detected"
+    - "[Your Name]"
+campaigns:
+  intro_email:
+    channel: email
+    subject: "Quick website audit for {business_name}"
+    body_template: |
+      Hi,
+
+      I put together a short local website audit for {business_name}. The goal is simple: find the few changes most likely to turn more local visitors into calls or form fills.
+
+      If this is useful, I can send over the notes.
+
+      Best,
+      {from_name}

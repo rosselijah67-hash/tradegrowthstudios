@@ -1,0 +1,114 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Review Queue - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <h1>Review Queue</h1>
+    <p>{{ prospects|length }} prospects ready for manual review</p>
+  </div>
+  <a class="button"
+    href="{{ url_for('leads', stage='PENDING_REVIEW', market=market_filter.selected) if market_filter.selected else url_for('leads', stage='PENDING_REVIEW') }}">Open
+    Table</a>
+</section>
+
+<form class="market-filter-form" method="get" action="{{ url_for('review_queue') }}">
+  <label>
+    <span>Market</span>
+    <select name="market">
+      <option value="">All markets</option>
+      {% for option in market_filter.options %}
+      <option value="{{ option.value }}" {% if market_filter.selected==option.value %}selected{% endif %}>{{
+        option.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <div class="filter-actions">
+    <button class="button primary" type="submit">Apply</button>
+    <a class="button" href="{{ url_for('review_queue') }}">Reset</a>
+  </div>
+</form>
+
+{% if message %}
+<div class="notice {{ message.status }}">{{ message.message }}</div>
+{% endif %}
+
+<section class="review-grid" aria-label="Manual review queue">
+  {% for prospect in prospects %}
+  {% set desktop = prospect.artifact_map.get('screenshot_desktop') %}
+  {% set mobile = prospect.artifact_map.get('screenshot_mobile') %}
+  {% set href = prospect.website_url|external_href %}
+  {% set audit_mode = prospect.score_explanation.get('audit_mode') or 'deep' %}
+  <article class="review-card">
+    <div class="review-card-body">
+      <div class="review-card-heading">
+        <div>
+          <h2>{{ prospect.business_name }}</h2>
+          <p>{{ prospect.market or "No market" }} | {{ prospect.niche or "No niche" }}</p>
+        </div>
+        <div class="score-badge">
+          <span>{{ prospect.expected_close_score }}</span>
+          <small>Opportunity</small>
+        </div>
+      </div>
+
+      {% if href %}
+      <a class="site-link" href="{{ href }}" target="_blank" rel="noopener noreferrer">{{ prospect.website_url }}</a>
+      {% else %}
+      <p class="missing-state">No website URL</p>
+      {% endif %}
+
+      <div class="thumb-row">
+        <figure>
+          {% if desktop and desktop.file_url and desktop.file_exists %}
+          <img src="{{ desktop.file_url }}" alt="Desktop screenshot for {{ prospect.business_name }}">
+          {% else %}
+          <div class="missing-thumb">Missing desktop</div>
+          {% endif %}
+          <figcaption>Desktop</figcaption>
+        </figure>
+        <figure>
+          {% if mobile and mobile.file_url and mobile.file_exists %}
+          <img src="{{ mobile.file_url }}" alt="Mobile screenshot for {{ prospect.business_name }}">
+          {% else %}
+          <div class="missing-thumb">Missing mobile</div>
+          {% endif %}
+          <figcaption>Mobile</figcaption>
+        </figure>
+      </div>
+
+      <div class="reason-list">
+        {% for reason in prospect.top_reasons %}
+        <div>
+          <strong>{{ reason.points if reason.points is defined else "" }}</strong>
+          <span>{{ reason.reason if reason.reason is defined else reason }}</span>
+        </div>
+        {% else %}
+        <p class="empty">No score reasons recorded.</p>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="review-card-footer">
+      <div class="review-card-pills">
+        <span class="pill">{{ prospect.website_pain_score }} pain</span>
+        <span class="pill audit-mode-badge audit-mode-{{ audit_mode|lower }}">{{ "Fast Audit" if audit_mode == "fast" else "Deep Audit" }}</span>
+      </div>
+      <div class="review-card-actions">
+        <form method="post" action="{{ url_for('quick_delete_review_card', prospect_id=prospect.id) }}">
+          <input type="hidden" name="market" value="{{ market_filter.selected }}">
+          <button class="button danger quick-delete-button" type="submit"
+            title="Remove this prospect from review and mark it rejected">Delete</button>
+        </form>
+        <a class="button primary" href="{{ url_for('case_file', prospect_id=prospect.id) }}">Open Case</a>
+      </div>
+    </div>
+  </article>
+  {% else %}
+  <div class="panel">
+    <p class="empty">No prospects currently match the manual review queue.</p>
+  </div>
+  {% endfor %}
+</section>
+{% endblock %}

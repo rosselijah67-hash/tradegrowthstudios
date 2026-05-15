@@ -1,0 +1,32 @@
+niches:
+  roofing:
+    label: Roofing
+    search_terms:
+      - roof repair
+      - roof replacement
+    service_angle: convert local emergency and project searches into booked estimates
+  hvac:
+    label: HVAC
+    search_terms:
+      - hvac contractor
+      - air conditioning repair
+      - furnace repair
+    service_angle: capture urgent service calls from local search
+  plumbing:
+    label: Plumbing
+    search_terms:
+      - plumber
+      - emergency plumber
+    service_angle: convert urgent searchers into booked calls
+  electrical:
+    label: Electrical
+    search_terms:
+      - electrician
+      - electrical repair
+    service_angle: turn local search visitors into service calls
+  garage_doors:
+    label: Garage Doors
+    search_terms:
+      - garage door repair
+      - garage door installation
+    service_angle: capture high-intent repair and replacement searches

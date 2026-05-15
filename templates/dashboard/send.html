@@ -1,0 +1,279 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Send - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <h1>Send</h1>
+    <p>Controlled step-1 sending for queued, approved, draft-ready, public-packet-ready prospects.</p>
+  </div>
+  <a class="button" href="{{ url_for('outbound') }}">Outbound Readiness</a>
+</section>
+
+{% if message %}
+  <div class="notice {{ message.status }}">{{ message.message }}</div>
+{% endif %}
+
+<section class="panel send-safety-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Safety Gate</h2>
+      <p>Queued emails are not sent until you confirm a real send below.</p>
+    </div>
+    <span class="pill {{ 'status-pass' if infra.ready else 'status-fail' }}">{{ "Ready" if infra.ready else "Blocked" }}</span>
+  </div>
+  <div class="send-status-grid">
+    <div>
+      <span>Daily sent</span>
+      <strong>{{ daily_sent_count }}</strong>
+    </div>
+    <div>
+      <span>Daily cap</span>
+      <strong>{{ config.daily_cap }}</strong>
+    </div>
+    <div>
+      <span>Remaining today</span>
+      <strong>{{ daily_remaining }}</strong>
+    </div>
+    <div>
+      <span>Queued sendable</span>
+      <strong>{{ queued_sendable_count }}</strong>
+    </div>
+  </div>
+  <p class="warning-text">No tracking pixels, click tracking, or screenshot attachments are used by default.</p>
+</section>
+
+<section class="panel send-inbox-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Inbox Sync</h2>
+      <p>
+        {% if inbox_sync.exists %}
+          Last {{ inbox_sync.mode }} sync from {{ inbox_sync.source }} at {{ inbox_sync.created_at }}.
+        {% else %}
+          No inbox sync summary yet. Run <code>python -m src.inbox_sync --dry-run</code>.
+        {% endif %}
+      </p>
+    </div>
+  </div>
+  <div class="send-status-grid">
+    <div><span>Matched replies</span><strong>{{ inbox_sync.counts.matched }}</strong></div>
+    <div><span>Unsubscribes</span><strong>{{ inbox_sync.counts.unsubscribe }}</strong></div>
+    <div><span>Bounces</span><strong>{{ inbox_sync.counts.bounce }}</strong></div>
+    <div><span>Interested</span><strong>{{ inbox_sync.counts.interested }}</strong></div>
+  </div>
+  <p class="muted">Manual fallback CSV: <code>runs/latest/inbound_replies.csv</code> with columns <code>email,category,note</code>.</p>
+  {% if inbox_sync.rows %}
+    <div class="table-wrap">
+      <table class="compact-table inbox-sync-table">
+        <thead>
+          <tr>
+            <th>Category</th>
+            <th>Matched</th>
+            <th>Email</th>
+            <th>Subject / Note</th>
+            <th>Case</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in inbox_sync.rows %}
+            <tr>
+              <td><span class="pill status-{{ 'pass' if row.matched else 'warn' }}">{{ row.category|pretty_label }}</span></td>
+              <td>{{ "Yes" if row.matched else "No" }}</td>
+              <td>{{ row.from_email }}</td>
+              <td>{{ row.subject or row.note or "" }}</td>
+              <td>
+                {% if row.prospect_id %}
+                  <a class="table-action" href="{{ url_for('case_file', prospect_id=row.prospect_id) }}">Case</a>
+                {% else %}
+                  <span class="muted">Unmatched</span>
+                {% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% endif %}
+</section>
+
+<section class="send-grid">
+  <section class="panel">
+    <div class="panel-header">
+      <div>
+        <h2>Infrastructure</h2>
+        <p>Latest <code>runs/latest/email_infra_check.json</code></p>
+      </div>
+    </div>
+    <div class="outbound-status-strip">
+      <div><span>Pass</span><strong>{{ infra.summary.PASS }}</strong></div>
+      <div><span>Warn</span><strong>{{ infra.summary.WARN }}</strong></div>
+      <div><span>Fail</span><strong>{{ infra.summary.FAIL }}</strong></div>
+    </div>
+    <div class="send-config-list">
+      <div><span>From</span><strong>{{ config.from_name }}{% if config.from_email %} &lt;{{ config.from_email }}&gt;{% endif %}</strong></div>
+      <div><span>Sender business</span><strong>{{ config.business_name or "Missing" }}</strong></div>
+      <div>
+        <span>SMTP</span>
+        <strong>
+          {{ config.smtp_host or "Missing" }}:
+          {% if not config.smtp_port_configured %}Missing{% elif not config.smtp_port_valid %}Invalid{% else %}{{ config.smtp_port }}{% endif %}
+        </strong>
+      </div>
+      <div><span>Unsubscribe</span><strong>{{ config.unsubscribe_email or "Missing" }}</strong></div>
+      <div><span>Physical address</span><strong>{{ "Configured" if config.physical_address else "Missing" }}</strong></div>
+    </div>
+    <a class="button" href="{{ url_for('project_file', file_path='docs/EMAIL_INFRA_SETUP.md') }}" target="_blank" rel="noopener noreferrer">Email Setup</a>
+  </section>
+
+  <section class="panel">
+    <div class="panel-header">
+      <div>
+        <h2>Test Send</h2>
+        <p>Sends one infrastructure test only. It does not touch prospects.</p>
+      </div>
+    </div>
+    <form class="send-form" method="post" action="{{ url_for('send_test_email') }}">
+      <label>
+        <span>Test recipient</span>
+        <input type="email" name="test_email" placeholder="you@example.com" required>
+      </label>
+      <label class="check-row">
+        <input type="checkbox" name="confirm_test" value="1" required>
+        <span>I confirm this sends one test email only.</span>
+      </label>
+      <button class="button" type="submit">Send Test Email</button>
+    </form>
+  </section>
+</section>
+
+<section class="panel send-batch-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Send Queued Step 1 Emails</h2>
+      <p>Plain-text only. Sends at most {{ send_limit_max }} per batch and respects the daily cap.</p>
+    </div>
+  </div>
+  <form class="send-batch-form" method="post" action="{{ url_for('send_batch') }}">
+    <label>
+      <span>Batch limit</span>
+      <input type="number" name="limit" min="1" max="{{ send_limit_max }}" value="{{ send_limit_default }}">
+    </label>
+    <label class="check-row">
+      <input type="checkbox" name="confirm_send" value="1" required>
+      <span>I confirm this sends real queued Step 1 email.</span>
+    </label>
+    <label class="check-row">
+      <input type="checkbox" name="include_attachments" value="1">
+      <span>Include screenshot attachments only for queue rows that explicitly approved them.</span>
+    </label>
+    <button class="button danger" type="submit" {% if not infra.ready or daily_remaining <= 0 or queued_sendable_count == 0 %}disabled{% endif %}>Send Real Batch</button>
+  </form>
+</section>
+
+<section class="table-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Queued Step-1 Emails</h2>
+      <p>Every row is rechecked at send time before SMTP is touched.</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="compact-table send-table">
+      <thead>
+        <tr>
+          <th>Queue</th>
+          <th>Business</th>
+          <th>Market/Niche</th>
+          <th>Email</th>
+          <th>Subject</th>
+          <th>Packet</th>
+          <th>Blockers</th>
+          <th>Links</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in queued_rows %}
+          <tr class="{% if not row.sendable %}muted-row{% endif %}">
+            <td><span class="pill {{ 'status-pass' if row.sendable else 'status-warn' }}">{{ "Sendable" if row.sendable else "Blocked" }}</span><br><span class="muted">{{ row.queue_key }}</span></td>
+            <td class="business-cell">{{ row.business_name }}</td>
+            <td>{{ row.market or "" }}{% if row.niche %}<br><span class="muted">{{ row.niche }}</span>{% endif %}</td>
+            <td>{{ row.email_redacted or "Missing" }}</td>
+            <td>{{ row.draft_subject or row.subject or "Missing" }}</td>
+            <td class="url-cell">{{ row.public_packet_url or "Missing" }}</td>
+            <td>
+              {% if row.blockers %}
+                <div class="blocker-list">
+                  {% for blocker in row.blockers %}
+                    <span>{{ blocker }}</span>
+                  {% endfor %}
+                </div>
+              {% else %}
+                None
+              {% endif %}
+            </td>
+            <td class="link-list">
+              <a class="table-action" href="{{ row.case_url }}">Case</a>
+              {% if row.public_packet_link %}
+                <a class="table-action" href="{{ row.public_packet_link }}" target="_blank" rel="noopener noreferrer">Packet</a>
+              {% endif %}
+              {% if row.draft_url %}
+                <a class="table-action" href="{{ row.draft_url }}" target="_blank" rel="noopener noreferrer">Draft</a>
+              {% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="8" class="empty">No queued step-1 emails. Create the queue from Outbound first.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="table-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Blocked / Skipped Queue Items</h2>
+      <p>These are not eligible for the next real send batch.</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="compact-table send-table">
+      <thead>
+        <tr>
+          <th>Status</th>
+          <th>Business</th>
+          <th>Email</th>
+          <th>Subject</th>
+          <th>Reason</th>
+          <th>Links</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in blocked_rows + skipped_rows %}
+          <tr>
+            <td><span class="pill status-warn">{{ row.queue_status }}</span></td>
+            <td class="business-cell">{{ row.business_name }}</td>
+            <td>{{ row.email_redacted or "Missing" }}</td>
+            <td>{{ row.draft_subject or row.subject or "Missing" }}</td>
+            <td>{{ row.blockers|join(", ") if row.blockers else row.queue_status }}</td>
+            <td class="link-list">
+              <a class="table-action" href="{{ row.case_url }}">Case</a>
+              {% if row.draft_url %}
+                <a class="table-action" href="{{ row.draft_url }}" target="_blank" rel="noopener noreferrer">Draft</a>
+              {% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="6" class="empty">No blocked or skipped queue items.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

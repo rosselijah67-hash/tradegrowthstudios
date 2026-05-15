@@ -1,0 +1,277 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Sales Packet - {{ prospect.business_name }}{% endblock %}
+
+{% block content %}
+{% set href = prospect.website_url|external_href %}
+
+{% if message %}
+  <div class="notice success">{{ message }}</div>
+{% endif %}
+
+<section class="case-header">
+  <div>
+    <a class="back-link" href="{{ url_for('case_file', prospect_id=prospect.id) }}">Back to case file</a>
+    <h1>Sales Packet: {{ prospect.business_name }}</h1>
+    <div class="case-meta">
+      <span>{{ prospect.pipeline_stage|pretty_label }}</span>
+      <span>{{ packet.package.tier }}</span>
+      <span>{{ packet.package.price }}</span>
+    </div>
+  </div>
+  <div class="case-header-actions">
+    {% if href %}
+      <a class="button" href="{{ href }}" target="_blank" rel="noopener noreferrer">Open Website</a>
+    {% endif %}
+    <a class="button primary" href="{{ url_for('case_file', prospect_id=prospect.id) }}">Case File</a>
+  </div>
+</section>
+
+<section class="summary-grid sales-summary-grid">
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Business Summary</h2>
+    </div>
+    <dl class="detail-list">
+      <div><dt>Name</dt><dd>{{ prospect.business_name }}</dd></div>
+      <div><dt>Niche</dt><dd>{{ prospect.niche or "Missing" }}</dd></div>
+      <div><dt>Market</dt><dd>{{ prospect.market or "Missing" }}</dd></div>
+      <div><dt>Website</dt><dd>{{ prospect.website_url or "Missing" }}</dd></div>
+      <div><dt>Phone</dt><dd>{{ prospect.phone or "Missing" }}</dd></div>
+      <div><dt>Contact Email</dt><dd>{{ packet.contact_email or "Missing" }}</dd></div>
+      <div><dt>Contact Name</dt><dd>{{ packet.contact_name or "Missing" }}</dd></div>
+    </dl>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Recommended Package</h2>
+    </div>
+    <dl class="detail-list">
+      <div><dt>Tier</dt><dd>{{ packet.package.tier }}</dd></div>
+      <div><dt>Pricing Recommendation</dt><dd>{{ packet.package.price }}</dd></div>
+    </dl>
+    <ul class="packet-list">
+      {% for reason in packet.package.rationale %}
+        <li>{{ reason }}</li>
+      {% endfor %}
+    </ul>
+    <p class="missing-state">Pricing guidance only. This is not a contract or payment request.</p>
+  </div>
+</section>
+
+<section class="packet-grid">
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Automated Audit Issues</h2>
+    </div>
+    <div class="packet-item-list">
+      {% for issue in packet.automated_issues %}
+        <article class="packet-item">
+          <strong>{{ issue.label }}</strong>
+          <p>{{ issue.evidence }}</p>
+        </article>
+      {% else %}
+        <p class="empty">No top automated website issues found in stored audit data.</p>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Manual Visual Issues</h2>
+    </div>
+    <div class="packet-item-list">
+      {% for issue in packet.visual_issues %}
+        <article class="packet-item">
+          <strong>{{ issue.label }}</strong>
+          <p>Severity {{ issue.severity }}/5. {{ issue.evidence }}</p>
+        </article>
+      {% else %}
+        <p class="empty">No high-severity manual visual issues saved yet.</p>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="packet-grid">
+  <div class="panel">
+    <div class="panel-header">
+      <h2>PageSpeed Signals</h2>
+    </div>
+    <div class="packet-speed-grid">
+      {% for label, speed in [("Mobile", packet.pagespeed.mobile), ("Desktop", packet.pagespeed.desktop)] %}
+        <article class="packet-speed-card">
+          <div>
+            <strong>{{ label }}</strong>
+            <span>{{ speed.score if speed.score is not none else "Missing" }}</span>
+          </div>
+          <p>{{ speed.summary or speed.status or "No PageSpeed row found." }}</p>
+          {% if speed.metrics %}
+            <dl class="detail-list">
+              {% for metric in speed.metrics %}
+                <div><dt>{{ metric.label }}</dt><dd>{{ metric.value }}</dd></div>
+              {% endfor %}
+            </dl>
+          {% endif %}
+        </article>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>CTA And Service Path</h2>
+    </div>
+    <div class="packet-item-list">
+      {% for signal in packet.cta_signals %}
+        <article class="packet-item">
+          <strong>{{ signal.label }}: {{ signal.count }}</strong>
+          <p>{{ signal.status }}. {{ signal.evidence }}</p>
+        </article>
+      {% else %}
+        <p class="empty">No site audit CTA/form/service-page fields were available.</p>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+
+<section class="media-section">
+  <div class="section-header">
+    <h2>Current Site Screenshots</h2>
+  </div>
+  <div class="screenshot-grid">
+    <figure class="screenshot-card">
+      {% if packet.desktop and packet.desktop.file_url and packet.desktop.file_exists %}
+        <img src="{{ packet.desktop.file_url }}" alt="Desktop screenshot for {{ prospect.business_name }}">
+      {% else %}
+        <div class="missing-image">Desktop screenshot missing</div>
+      {% endif %}
+      <figcaption><span>Desktop</span><small>{{ packet.desktop.status if packet.desktop else "missing" }}</small></figcaption>
+    </figure>
+
+    <figure class="screenshot-card">
+      {% if packet.mobile and packet.mobile.file_url and packet.mobile.file_exists %}
+        <img src="{{ packet.mobile.file_url }}" alt="Mobile screenshot for {{ prospect.business_name }}">
+      {% else %}
+        <div class="missing-image">Mobile screenshot missing</div>
+      {% endif %}
+      <figcaption><span>Mobile</span><small>{{ packet.mobile.status if packet.mobile else "missing" }}</small></figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="packet-grid">
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Recommended Pitch</h2>
+    </div>
+    <p>{{ packet.opening }}</p>
+    <div class="packet-item-list">
+      {% for point in packet.sales_points %}
+        <article class="packet-item">
+          <strong>{{ point.label }}</strong>
+          <p>{{ point.evidence }}</p>
+        </article>
+      {% endfor %}
+    </div>
+    <p class="warning-text">{{ packet.conversion_path }}</p>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Scope Boundaries</h2>
+    </div>
+    <div class="scope-grid">
+      <div>
+        <h3>Included</h3>
+        <ul class="packet-list">
+          {% for item in packet.scope.included %}<li>{{ item }}</li>{% endfor %}
+        </ul>
+      </div>
+      <div>
+        <h3>Excluded</h3>
+        <ul class="packet-list">
+          {% for item in packet.scope.excluded %}<li>{{ item }}</li>{% endfor %}
+        </ul>
+      </div>
+      <div>
+        <h3>Upsell</h3>
+        <ul class="packet-list">
+          {% for item in packet.scope.upsells %}<li>{{ item }}</li>{% endfor %}
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="packet-grid">
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Likely Objections</h2>
+    </div>
+    <div class="packet-item-list">
+      {% for objection in packet.objections %}
+        <article class="packet-item">
+          <strong>{{ objection.objection }}</strong>
+          <p>{{ objection.response }}</p>
+        </article>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Response Language</h2>
+    </div>
+    <ul class="packet-list">
+      {% for item in packet.response_language %}
+        <li>{{ item }}</li>
+      {% endfor %}
+    </ul>
+  </div>
+</section>
+
+<section class="packet-grid">
+  <form class="panel crm-stage-form" method="post" action="{{ url_for('save_sales_packet_notes', prospect_id=prospect.id) }}">
+    <div class="panel-header">
+      <h2>Sales Notes</h2>
+    </div>
+    <label>
+      <span>Notes</span>
+      <textarea name="sales_notes" rows="8">{{ packet.sales_notes }}</textarea>
+    </label>
+    <button class="button primary" type="submit">Save Notes</button>
+  </form>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Stage Actions</h2>
+    </div>
+    <div class="review-actions">
+      {% if prospect.pipeline_stage != "PROPOSAL_SENT" and prospect.pipeline_stage != "CLOSED_WON" %}
+        <form method="post" action="{{ url_for('update_case_stage', prospect_id=prospect.id) }}">
+          <input type="hidden" name="new_status" value="PROPOSAL_SENT">
+          <input type="hidden" name="stage_note" value="Marked proposal sent from sales packet.">
+          <input type="hidden" name="return_to" value="sales_packet">
+          <button class="button primary" type="submit">Mark Proposal Sent</button>
+        </form>
+      {% endif %}
+      {% if prospect.pipeline_stage != "CLOSED_WON" %}
+        <form method="post" action="{{ url_for('update_case_stage', prospect_id=prospect.id) }}">
+          <input type="hidden" name="new_status" value="CLOSED_WON">
+          <input type="hidden" name="stage_note" value="Marked closed won from sales packet.">
+          <input type="hidden" name="return_to" value="sales_packet">
+          <button class="button primary" type="submit">Mark Closed Won</button>
+        </form>
+      {% endif %}
+      <form method="post" action="{{ url_for('update_case_stage', prospect_id=prospect.id) }}">
+        <input type="hidden" name="new_status" value="CLOSED_LOST">
+        <input type="hidden" name="stage_note" value="Marked closed lost from sales packet.">
+        <button class="button danger" type="submit">Mark Closed Lost</button>
+      </form>
+    </div>
+    <p class="missing-state">These buttons only update CRM status. They do not send email, create contracts, or process payment.</p>
+  </div>
+</section>
+{% endblock %}

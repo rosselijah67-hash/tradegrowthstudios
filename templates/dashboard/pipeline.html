@@ -1,0 +1,117 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Pipeline - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <h1>Pipeline</h1>
+    <p>Run bounded local jobs from the dashboard.</p>
+  </div>
+</section>
+
+{% if job_result %}
+  <div class="notice {% if job_result.status == 'success' %}success{% else %}error{% endif %}">
+    {{ job_result.message }}
+  </div>
+{% endif %}
+
+<form class="market-filter-form" method="get" action="{{ url_for('pipeline') }}">
+  <label>
+    <span>Market</span>
+    <select name="market">
+      <option value="">All markets</option>
+      {% for option in market_filter.options %}
+        <option value="{{ option.value }}" {% if market_filter.selected == option.value %}selected{% endif %}>{{ option.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <div class="filter-actions">
+    <button class="button primary" type="submit">Apply</button>
+    <a class="button" href="{{ url_for('pipeline') }}">Reset</a>
+  </div>
+</form>
+
+<section class="stage-grid" aria-label="Pipeline counts">
+  {% for item in counts %}
+    <div class="stage-card">
+      <span class="stage-count">{{ item.count }}</span>
+      <span class="stage-label">{{ item.bucket|pretty_label }}</span>
+    </div>
+  {% endfor %}
+</section>
+
+<section class="pipeline-grid" aria-label="Pipeline job controls">
+  {% for job_type, job in jobs.items() %}
+    <form class="panel pipeline-job-card" method="post" action="{{ url_for('run_pipeline_job') }}">
+      <input type="hidden" name="job_type" value="{{ job_type }}">
+      <div class="panel-header">
+        <div>
+          <h2>{{ job.label }}</h2>
+          <p>{{ job.description }}</p>
+        </div>
+      </div>
+
+      {% if job_type == "audit" %}
+        <p class="warning-text">
+          This audit calls live websites and may use Playwright screenshots and PageSpeed unless skipped.
+        </p>
+        <p class="warning-text">
+          Audit jobs may take several minutes. The page will reload when the job finishes. Do not close this tab.
+        </p>
+      {% endif %}
+
+      <label>
+        <span>Market</span>
+        <select name="market">
+          <option value="">All markets</option>
+          {% for market in job_market_options %}
+            <option value="{{ market.value }}" {% if market_filter.selected == market.value %}selected{% endif %}>{{ market.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label>
+        <span>Niche</span>
+        <select name="niche">
+          <option value="">All niches</option>
+          {% for niche in niche_options %}
+            <option value="{{ niche }}">{{ niche }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label>
+        <span>Limit</span>
+        <input type="number" name="limit" min="1" max="1000" value="{{ default_limit }}">
+      </label>
+
+      <label class="check-row">
+        <input type="checkbox" name="dry_run" value="1" checked>
+        <span>Dry run</span>
+      </label>
+
+      {% if job_type == "audit" %}
+        <label class="check-row">
+          <input type="checkbox" name="skip_pagespeed" value="1">
+          <span>Skip PageSpeed</span>
+        </label>
+      {% endif %}
+
+      <label class="check-row">
+        <input type="checkbox" name="confirm_run" value="1">
+        <span>Confirm actual run</span>
+      </label>
+
+      <button class="button primary" type="submit">{{ job.label }}</button>
+    </form>
+  {% endfor %}
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>Latest Job Log</h2>
+  </div>
+  <pre class="job-log">{{ job_log }}</pre>
+</section>
+{% endblock %}

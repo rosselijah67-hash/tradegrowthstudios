@@ -1,0 +1,75 @@
+markets:
+  mckinney_tx:
+    label: McKinney-Frisco-Prosper/Celina, TX
+    priority: true
+    state: TX
+    country: US
+    center_city: McKinney, TX
+    included_cities:
+    - McKinney
+    - Frisco
+    - Prosper
+    - Celina
+    - Allen
+    - Plano
+    - Princeton
+    - Melissa
+    - Anna
+  cincinnati:
+    label: Cincinnati, OH
+    state: OH
+    country: US
+    cities:
+    - Cincinnati
+    - Norwood
+    - Blue Ash
+    - Mason
+    radius_miles: 30
+  dayton:
+    label: Dayton, OH
+    state: OH
+    country: US
+    cities:
+    - Dayton
+    - Beavercreek
+    - Kettering
+    radius_miles: 25
+  columbus_oh:
+    label: Columbus
+    priority: false
+    state: OH
+    included_cities:
+    - Columbus
+    - Upper Arlington
+    - Worthington
+    - Worthington Hills
+    notes: More to come
+  akron_oh:
+    label: Akron
+    priority: false
+    state: OH
+    included_cities:
+    - Akron
+    - Barberton
+    - Fairlawn
+    - Cuyahoga Falls
+    - Tallmadge
+    - Mogadore
+    - Copley
+    - Norton
+    - Wadsworth
+    - Green
+    notes: Akron and all surrounding cities
+  cleveland_oh:
+    label: Cleveland
+    priority: false
+    state: OH
+    included_cities:
+    - Cleveland
+    - Parma
+    - Lakewood
+    - Independence
+    - Solon
+    - Garfield Heights
+    - Beachwood
+    notes: Cle and surrounding areas.

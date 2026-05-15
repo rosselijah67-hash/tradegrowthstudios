@@ -1,0 +1,395 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Run - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <h1>Run</h1>
+    <p>Start whitelisted pipeline steps from the dashboard. Outreach sending is not available here.</p>
+  </div>
+  <a class="button" href="{{ url_for('jobs') }}">Open Jobs</a>
+</section>
+
+{% if message %}
+  <div class="notice {{ message.status }}">{{ message.message }}</div>
+{% endif %}
+
+<section class="panel run-selector-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Market and Niche</h2>
+      <p>Select a target market before running external data collection.</p>
+    </div>
+  </div>
+  <form class="run-selector-form" method="get" action="{{ url_for('run_controls') }}">
+    <label>
+      <span>Market</span>
+      <select name="market">
+        <option value="">All markets</option>
+        {% for option in market_filter.options %}
+          <option value="{{ option.value }}" {% if market_filter.selected == option.value %}selected{% endif %}>{{ option.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <fieldset class="niche-fieldset">
+      <legend>Niches</legend>
+      <div class="niche-checkbox-grid">
+        {% for niche in niches %}
+          <label class="check-row">
+            <input type="checkbox" name="niche" value="{{ niche.key }}" {% if niche.key in selected_niches %}checked{% endif %}>
+            <span>{{ niche.label }}</span>
+          </label>
+        {% endfor %}
+      </div>
+    </fieldset>
+
+    <div class="run-selector-actions">
+      <button class="button primary" type="submit">Apply</button>
+      <a class="button" href="{{ url_for('markets') }}">Manage Markets</a>
+      <a class="button" href="{{ url_for('leads', market=market_filter.selected) if market_filter.selected else url_for('leads') }}">View Leads</a>
+      <a class="button" href="{{ url_for('review_queue', market=market_filter.selected) if market_filter.selected else url_for('review_queue') }}">View Review Queue</a>
+    </div>
+  </form>
+</section>
+
+{% if not market_filter.selected %}
+  <p class="warning-text">Choose a market before running external data collection.</p>
+{% endif %}
+
+<section class="stage-grid run-count-grid" aria-label="Current market counts">
+  {% for item in run_counts %}
+    <div class="stage-card">
+      <span class="stage-count">{{ item.count }}</span>
+      <span class="stage-label">{{ item.label }}</span>
+    </div>
+  {% endfor %}
+</section>
+
+<section class="panel run-recommendation-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Recommended next action</h2>
+      <p>{{ recommended_action.action }}</p>
+    </div>
+  </div>
+  <p class="audit-selectable-count">
+    Audit-selectable leads: <strong>{{ recommended_action.count_map.audit_selectable }}</strong>
+  </p>
+  {% if recommended_action.count_map.audit_selectable == 0 and recommended_action.count_map.discovered_new > 0 %}
+    <p class="warning-text">Run live eligibility first; DISCOVERED leads are not audit-selectable.</p>
+  {% endif %}
+  <div class="run-action-count-grid">
+    {% for item in recommended_action.counts %}
+      <div>
+        <span>{{ item.label }}</span>
+        <strong>{{ item.count }}</strong>
+      </div>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="pipeline-grid" aria-label="Individual pipeline actions">
+  <form class="panel pipeline-job-card" method="post" action="{{ url_for('start_dashboard_job') }}">
+    <input type="hidden" name="source" value="run">
+    <input type="hidden" name="job_type" value="places_pull">
+    <input type="hidden" name="market" value="{{ market_filter.selected }}">
+    <div class="panel-header">
+      <div>
+        <h2>Pull Places Leads</h2>
+        <p>Pulls one configured niche for the selected market.</p>
+      </div>
+    </div>
+    <p class="warning-text">Preview only — calls Google Places API, does not write to database.</p>
+    <p class="form-help">Unlike local dry-runs, this still uses Google API quota.</p>
+    <label>
+      <span>Niche</span>
+      <select name="niche" required>
+        <option value="">Select niche</option>
+        {% for niche in niches %}
+          <option value="{{ niche.key }}" {% if niche.key == primary_niche %}selected{% endif %}>{{ niche.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      <span>Limit</span>
+      <input type="number" name="limit_count" min="1" max="{{ places_limit_max }}" value="{{ places_limit_default }}">
+    </label>
+    <label class="check-row">
+      <input type="checkbox" name="dry_run" value="1" checked>
+      <span>Preview only — calls Google Places API, does not write to database</span>
+    </label>
+    <label class="check-row">
+      <input type="checkbox" name="confirm_run" value="1">
+      <span>Confirm live Places run</span>
+    </label>
+    <button class="button primary" type="submit" {% if not market_filter.selected %}disabled{% endif %}>Start Places Pull</button>
+  </form>
+
+  <form class="panel pipeline-job-card" method="post" action="{{ url_for('start_dashboard_job') }}">
+    <input type="hidden" name="source" value="run">
+    <input type="hidden" name="job_type" value="eligibility">
+    <input type="hidden" name="market" value="{{ market_filter.selected }}">
+    <div class="panel-header">
+      <div>
+        <h2>Run Eligibility</h2>
+        <p>Qualifies existing local prospects for audit readiness.</p>
+      </div>
+    </div>
+    <label>
+      <span>Niche</span>
+      <select name="niche">
+        <option value="">All selected market niches</option>
+        {% for niche in niches %}
+          <option value="{{ niche.key }}" {% if niche.key == primary_niche %}selected{% endif %}>{{ niche.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      <span>Limit</span>
+      <input type="number" name="limit_count" min="1" max="1000" value="100">
+    </label>
+    <label class="check-row">
+      <input type="checkbox" name="dry_run" value="1">
+      <span>Dry run</span>
+    </label>
+    <p class="form-help">Unchecked dry-run writes to SQLite and/or local files.</p>
+    <button class="button primary" type="submit">Start Eligibility</button>
+  </form>
+
+  <form class="panel pipeline-job-card" method="post" action="{{ url_for('start_dashboard_job') }}">
+    <input type="hidden" name="source" value="run">
+    <input type="hidden" name="job_type" value="audit">
+    <input type="hidden" name="market" value="{{ market_filter.selected }}">
+    <div class="panel-header">
+      <div>
+        <h2>Run Audits</h2>
+        <p>Audits qualified, eligible leads only.</p>
+      </div>
+    </div>
+    <p class="warning-text">Fetches live websites, may use Playwright screenshots and PageSpeed. Keep the limit tight.</p>
+    <label>
+      <span>Audit mode</span>
+      <select name="audit_mode">
+        <option value="deep" {% if selected_audit_mode != "fast" %}selected{% endif %}>Deep Audit</option>
+        <option value="fast" {% if selected_audit_mode == "fast" %}selected{% endif %}>Fast Audit</option>
+      </select>
+    </label>
+    <p class="form-help">Fast Audit is for batch triage. Deep Audit is slower and better for high-priority cases.</p>
+    <p class="form-help">Fast Audit captures screenshots and runs a lightweight crawl; PageSpeed is skipped by default.</p>
+    <label>
+      <span>Limit</span>
+      <input type="number" name="limit_count" min="1" max="{{ audit_limit_max }}" value="{{ audit_limit_default }}">
+    </label>
+    <label class="check-row">
+      <input type="checkbox" name="dry_run" value="1" checked>
+      <span>Dry run</span>
+    </label>
+    <label class="check-row">
+      <input type="checkbox" name="allow_all_markets" value="1">
+      <span>Allow all markets</span>
+    </label>
+    <label class="check-row">
+      <input type="checkbox" name="confirm_run" value="1">
+      <span>Confirm live audit run</span>
+    </label>
+    <button class="button primary" type="submit">Start Audits</button>
+  </form>
+
+  <form class="panel pipeline-job-card" method="post" action="{{ url_for('start_dashboard_job') }}">
+    <input type="hidden" name="source" value="run">
+    <input type="hidden" name="job_type" value="score">
+    <input type="hidden" name="market" value="{{ market_filter.selected }}">
+    <div class="panel-header">
+      <div>
+        <h2>Run Scoring</h2>
+        <p>Scores audited leads from local audit data.</p>
+      </div>
+    </div>
+    <label>
+      <span>Niche</span>
+      <select name="niche">
+        <option value="">All selected market niches</option>
+        {% for niche in niches %}
+          <option value="{{ niche.key }}" {% if niche.key == primary_niche %}selected{% endif %}>{{ niche.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      <span>Limit</span>
+      <input type="number" name="limit_count" min="1" max="1000">
+    </label>
+    <label class="check-row">
+      <input type="checkbox" name="dry_run" value="1">
+      <span>Dry run</span>
+    </label>
+    <p class="form-help">Unchecked dry-run writes to SQLite and/or local files.</p>
+    <button class="button primary" type="submit">Start Scoring</button>
+  </form>
+
+  <form class="panel pipeline-job-card" method="post" action="{{ url_for('start_dashboard_job') }}">
+    <input type="hidden" name="source" value="run">
+    <input type="hidden" name="job_type" value="artifacts">
+    <input type="hidden" name="market" value="{{ market_filter.selected }}">
+    <div class="panel-header">
+      <div>
+        <h2>Generate Artifacts</h2>
+        <p>Writes local review/sales artifacts for ready leads.</p>
+      </div>
+    </div>
+    <label>
+      <span>Niche</span>
+      <select name="niche">
+        <option value="">All selected market niches</option>
+        {% for niche in niches %}
+          <option value="{{ niche.key }}" {% if niche.key == primary_niche %}selected{% endif %}>{{ niche.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      <span>Limit</span>
+      <input type="number" name="limit_count" min="1" max="1000" value="{{ artifact_limit_default }}">
+    </label>
+    <label class="check-row">
+      <input type="checkbox" name="dry_run" value="1">
+      <span>Dry run</span>
+    </label>
+    <p class="form-help">Unchecked dry-run writes to SQLite and/or local files.</p>
+    <button class="button primary" type="submit">Generate Artifacts</button>
+  </form>
+
+  <form class="panel pipeline-job-card" method="post" action="{{ url_for('start_dashboard_job') }}">
+    <input type="hidden" name="source" value="run">
+    <input type="hidden" name="job_type" value="reconcile_statuses">
+    <div class="panel-header">
+      <div>
+        <h2>Reconcile Statuses</h2>
+        <p>Normalizes status and next-action drift.</p>
+      </div>
+    </div>
+    <label>
+      <span>Limit</span>
+      <input type="number" name="limit_count" min="1" max="1000">
+    </label>
+    <label class="check-row">
+      <input type="checkbox" name="dry_run" value="1" checked>
+      <span>Dry run</span>
+    </label>
+    <p class="form-help">Unchecked dry-run writes to SQLite and/or local files.</p>
+    <label class="check-row">
+      <input type="checkbox" name="confirm_run" value="1">
+      <span>Confirm apply</span>
+    </label>
+    <button class="button primary" type="submit">Start Reconcile</button>
+  </form>
+</section>
+
+<section class="panel full-pipeline-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Full Market Pipeline</h2>
+      <p>Runs Places and eligibility per selected niche, then audits, scoring, artifacts, and reconciliation for the market.</p>
+    </div>
+  </div>
+  <p class="warning-text">Includes external API and website calls. Steps run sequentially and stop on the first failure.</p>
+  <p class="warning-text">For Places steps: Preview only — calls Google Places API, does not write to database.</p>
+  <p class="form-help">Unlike local dry-runs, this still uses Google API quota.</p>
+  <form class="full-pipeline-form" method="post" action="{{ url_for('start_full_market_pipeline') }}">
+    <input type="hidden" name="market" value="{{ market_filter.selected }}">
+
+    <fieldset class="niche-fieldset">
+      <legend>Pipeline Niches</legend>
+      <div class="niche-checkbox-grid">
+        {% for niche in niches %}
+          <label class="check-row">
+            <input type="checkbox" name="niches" value="{{ niche.key }}" {% if niche.key in selected_niches %}checked{% endif %}>
+            <span>{{ niche.label }}</span>
+          </label>
+        {% endfor %}
+      </div>
+    </fieldset>
+
+    <div class="run-limit-grid">
+      <label>
+        <span>Places limit per niche</span>
+        <input type="number" name="per_niche_places_limit" min="1" max="{{ places_limit_max }}" value="{{ places_limit_default }}">
+      </label>
+      <label>
+        <span>Audit limit</span>
+        <input type="number" name="audit_limit" min="1" max="{{ audit_limit_max }}" value="{{ audit_limit_default }}">
+      </label>
+      <label>
+        <span>Artifact limit</span>
+        <input type="number" name="artifact_limit" min="1" max="1000" value="{{ artifact_limit_default }}">
+      </label>
+    </div>
+
+    <label>
+      <span>Audit mode</span>
+      <select name="audit_mode">
+        <option value="deep" {% if selected_audit_mode != "fast" %}selected{% endif %}>Deep Audit</option>
+        <option value="fast" {% if selected_audit_mode == "fast" %}selected{% endif %}>Fast Audit</option>
+      </select>
+    </label>
+    <p class="form-help">Fast Audit is for batch triage. Deep Audit is slower and better for high-priority cases.</p>
+    <p class="form-help">Fast Audit captures screenshots and runs a lightweight crawl; PageSpeed is skipped by default.</p>
+
+    <label class="check-row">
+      <input type="checkbox" name="dry_run_all" value="1" checked>
+      <span>Preview supported steps; Places still calls Google API without writing prospects</span>
+    </label>
+    <label class="check-row">
+      <input type="checkbox" name="confirm_run" value="1">
+      <span>Confirm full live pipeline</span>
+    </label>
+    <button class="button primary" type="submit" {% if not market_filter.selected %}disabled{% endif %}>Run Full Pipeline</button>
+  </form>
+</section>
+
+{% if market_filter.selected %}
+  <p class="run-review-link">
+    <a class="button" href="{{ url_for('review_queue', market=market_filter.selected) }}">Open Review Queue for this market</a>
+  </p>
+{% endif %}
+
+<section class="table-panel">
+  <div class="panel-header">
+    <h2>Recent Jobs</h2>
+  </div>
+  <div class="table-wrap">
+    <table class="compact-table">
+      <thead>
+        <tr>
+          <th>Job</th>
+          <th>Status</th>
+          <th>Type</th>
+          <th>Market</th>
+          <th>Niche</th>
+          <th>Started</th>
+          <th>Finished</th>
+          <th>Log</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in recent_jobs %}
+          <tr>
+            <td><code>{{ job.job_key }}</code></td>
+            <td><span class="pill">{{ job.status|pretty_label }}</span></td>
+            <td>{{ job.job_type|pretty_label }}</td>
+            <td>{{ job.market or "All" }}</td>
+            <td>{{ job.niche or "All" }}</td>
+            <td>{{ job.started_at or "" }}</td>
+            <td>{{ job.finished_at or "" }}</td>
+            <td><a class="table-action" href="{{ url_for('job_detail', job_key=job.job_key) }}">Open</a></td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="8" class="empty">No dashboard jobs have been started yet.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

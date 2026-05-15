@@ -1,0 +1,26 @@
+Subject: {{ subject }}
+
+Hi {{ contact_first_name or contact_name or "there" }},
+
+{{ opening_line or "I took one more look at the mobile path for " ~ business_name ~ "." }}
+
+{% if issue_bullets %}
+The part I would tighten first:
+{% for bullet in issue_bullets[:3] %}
+- {{ bullet }}
+{% endfor %}
+{% endif %}
+
+A phone visitor should be able to see what to do next without hunting through the page.
+
+{% if public_packet_url and packet_line %}
+{{ packet_line }}
+
+{% endif %}
+{{ walkthrough_ask or "Open to a short walkthrough?" }}
+
+{{ opt_out_line }}
+
+-- 
+{{ sender_name or "Trade Growth Studio" }}
+{% if sender_company and sender_company != sender_name %}{{ sender_company }}{% endif %}

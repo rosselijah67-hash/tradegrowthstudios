@@ -1,0 +1,230 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Outbound - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <h1>Outbound</h1>
+    <p>Readiness gate for approved outreach. No email can be sent from this page.</p>
+  </div>
+  <a class="button" href="{{ url_for('project_file', file_path='docs/EMAIL_INFRA_SETUP.md') }}" target="_blank" rel="noopener noreferrer">Email Setup</a>
+</section>
+
+{% if message %}
+  <div class="notice {{ message.status }}">{{ message.message }}</div>
+{% endif %}
+
+<form class="filters outbound-filters" method="get" action="{{ url_for('outbound') }}">
+  <label>
+    <span>Market</span>
+    <select name="market">
+      <option value="">All markets</option>
+      {% for market in market_options %}
+        <option value="{{ market.value }}" {% if filters.market == market.value %}selected{% endif %}>{{ market.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    <span>Niche</span>
+    <select name="niche">
+      <option value="">All niches</option>
+      {% for niche in niche_options %}
+        <option value="{{ niche }}" {% if filters.niche == niche %}selected{% endif %}>{{ niche }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <div class="filter-actions">
+    <button class="button primary" type="submit">Apply</button>
+    <a class="button" href="{{ url_for('outbound') }}">Reset</a>
+  </div>
+</form>
+
+<section class="panel outbound-infra-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Infrastructure Status</h2>
+      <p>{{ "Ready" if infra.ready else "Blocked" }} from latest <code>runs/latest/email_infra_check.json</code></p>
+    </div>
+    <span class="pill {{ 'status-pass' if infra.ready else 'status-fail' }}">{{ "Ready" if infra.ready else "Not Ready" }}</span>
+  </div>
+  <div class="outbound-status-strip">
+    <div><span>Pass</span><strong>{{ infra.summary.PASS }}</strong></div>
+    <div><span>Warn</span><strong>{{ infra.summary.WARN }}</strong></div>
+    <div><span>Fail</span><strong>{{ infra.summary.FAIL }}</strong></div>
+  </div>
+  <ul class="checklist">
+    <li>Run <code>python -m src.email_infra_check</code> before queueing real outbound.</li>
+    <li>Fix all FAIL rows before any send step is enabled.</li>
+    <li>Queued emails are not sent until you run the send step.</li>
+  </ul>
+  <div class="table-wrap">
+    <table class="compact-table">
+      <thead>
+        <tr>
+          <th>Status</th>
+          <th>Category</th>
+          <th>Check</th>
+          <th>Detail</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in infra.results[:12] %}
+          <tr>
+            <td><span class="pill status-{{ item.status|lower }}">{{ item.status }}</span></td>
+            <td>{{ item.category }}</td>
+            <td>{{ item.check }}</td>
+            <td>{{ item.detail }}</td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="4" class="empty">No infrastructure report details found.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="stage-grid outbound-count-grid" aria-label="Send-ready counts">
+  <div class="stage-card">
+    <span class="stage-count">{{ counts.approved_for_outreach }}</span>
+    <span class="stage-label">Approved for outreach</span>
+  </div>
+  <div class="stage-card">
+    <span class="stage-count">{{ counts.contact_ready }}</span>
+    <span class="stage-label">Contact ready</span>
+  </div>
+  <div class="stage-card">
+    <span class="stage-count">{{ counts.public_packet_ready }}</span>
+    <span class="stage-label">Public packet ready</span>
+  </div>
+  <div class="stage-card">
+    <span class="stage-count">{{ counts.draft_ready }}</span>
+    <span class="stage-label">Draft ready</span>
+  </div>
+  <div class="stage-card">
+    <span class="stage-count">{{ counts.suppressed }}</span>
+    <span class="stage-label">Suppressed</span>
+  </div>
+  <div class="stage-card">
+    <span class="stage-count">{{ counts.already_sent }}</span>
+    <span class="stage-label">Already sent</span>
+  </div>
+  <div class="stage-card">
+    <span class="stage-count">{{ counts.send_ready }}</span>
+    <span class="stage-label">Send ready</span>
+  </div>
+</section>
+
+<section class="panel outbound-queue-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Batch Queue Creation</h2>
+      <p>Queued emails are not sent until you run the send step.</p>
+    </div>
+  </div>
+  <p class="warning-text">First live batch should send Step 1 only. Do not automate follow-ups until replies/unsubscribes are stable.</p>
+  <form class="outbound-queue-form" method="post" action="{{ url_for('create_outbound_queue') }}">
+    <input type="hidden" name="market" value="{{ filters.market }}">
+    <input type="hidden" name="niche" value="{{ filters.niche }}">
+    <label>
+      <span>Max queue size</span>
+      <input type="number" name="queue_limit" min="1" max="{{ queue_limit_max }}" value="{{ queue_limit_default }}">
+    </label>
+    <button class="button primary" type="submit" {% if counts.send_ready == 0 %}disabled{% endif %}>Create Step 1 Send Queue</button>
+  </form>
+</section>
+
+<section class="table-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Send-Ready Prospects</h2>
+      <p>These rows have approval, contact email, public packet, draft, no suppression, no active queue, no prior send, and passing infrastructure.</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="compact-table outbound-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Business</th>
+          <th>Market/Niche</th>
+          <th>Email</th>
+          <th>Public Packet URL</th>
+          <th>Draft</th>
+          <th>Last Outreach</th>
+          <th>Blockers</th>
+          <th>Links</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in ready_rows %}
+          <tr>
+            <td>{{ row.prospect_id }}</td>
+            <td class="business-cell">{{ row.business_name }}</td>
+            <td>{{ row.market or "" }}{% if row.niche %}<br><span class="muted">{{ row.niche }}</span>{% endif %}</td>
+            <td>{{ row.email_redacted }}</td>
+            <td class="url-cell">{{ row.public_packet_url }}</td>
+            <td>{{ "Ready" if row.draft_ready else "Missing" }}</td>
+            <td>{{ row.last_outreach_status or "None" }}</td>
+            <td>{{ row.blockers|join(", ") if row.blockers else "None" }}</td>
+            <td class="link-list">
+              <a class="table-action" href="{{ url_for('case_file', prospect_id=row.prospect_id) }}">Case</a>
+              {% if row.public_packet_link %}
+                <a class="table-action" href="{{ row.public_packet_link }}" target="_blank" rel="noopener noreferrer">Packet</a>
+              {% endif %}
+              {% if row.draft_url %}
+                <a class="table-action" href="{{ row.draft_url }}" target="_blank" rel="noopener noreferrer">Draft</a>
+              {% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="9" class="empty">No prospects are send-ready for this filter.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="table-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Blocked Prospects</h2>
+      <p>Grouped reasons explaining why prospects are not currently send-ready.</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="compact-table">
+      <thead>
+        <tr>
+          <th>Reason</th>
+          <th>Count</th>
+          <th>Examples</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for group in blocked_groups %}
+          <tr>
+            <td>{{ group.reason|pretty_label }}</td>
+            <td>{{ group.count }}</td>
+            <td>
+              {% for row in group.examples %}
+                <a class="inline-example-link" href="{{ url_for('case_file', prospect_id=row.prospect_id) }}">{{ row.business_name }}</a>{% if not loop.last %}, {% endif %}
+              {% else %}
+                <span class="muted">None</span>
+              {% endfor %}
+            </td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="3" class="empty">No blockers for this filter.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

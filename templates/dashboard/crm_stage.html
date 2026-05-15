@@ -1,0 +1,74 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}{{ stage_label }} - CRM{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <a class="back-link" href="{{ url_for('crm', market=market_filter.selected) if market_filter.selected else url_for('crm') }}">Back to CRM</a>
+    <h1>{{ stage_label }}</h1>
+    <p>{{ prospects|length }} prospects</p>
+  </div>
+  <a class="button" href="{{ url_for('leads', stage=stage, market=market_filter.selected) if market_filter.selected else url_for('leads', stage=stage) }}">Open in Leads</a>
+</section>
+
+<form class="market-filter-form" method="get" action="{{ url_for('crm_stage', stage=stage) }}">
+  <label>
+    <span>Market</span>
+    <select name="market">
+      <option value="">All markets</option>
+      {% for option in market_filter.options %}
+        <option value="{{ option.value }}" {% if market_filter.selected == option.value %}selected{% endif %}>{{ option.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <div class="filter-actions">
+    <button class="button primary" type="submit">Apply</button>
+    <a class="button" href="{{ url_for('crm_stage', stage=stage) }}">Reset</a>
+  </div>
+</form>
+
+<section class="table-panel">
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Business</th>
+          <th>Market</th>
+          <th>Niche</th>
+          <th>Website</th>
+          <th>Status</th>
+          <th>Next Action</th>
+          <th>Updated</th>
+          <th>Case</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for prospect in prospects %}
+          <tr>
+            <td>{{ prospect.id }}</td>
+            <td class="business-cell">{{ prospect.business_name }}</td>
+            <td>{{ prospect.market or "" }}</td>
+            <td>{{ prospect.niche or "" }}</td>
+            <td>
+              {% set href = prospect.website_url|external_href %}
+              {% if href %}
+                <a href="{{ href }}" target="_blank" rel="noopener noreferrer">{{ prospect.website_url }}</a>
+              {% endif %}
+            </td>
+            <td>{{ prospect.status or "" }}</td>
+            <td>{{ prospect.next_action or "" }}</td>
+            <td>{{ prospect.updated_at or "" }}</td>
+            <td><a class="table-action" href="{{ url_for('case_file', prospect_id=prospect.id) }}">Open</a></td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="9" class="empty">No prospects in this CRM stage.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,238 @@
+version: 1
+updated_at: "2026-05-12T00:00:00Z"
+description: "Known franchise, national-chain, rollup, and corporate home-service brands to exclude or penalize before audit."
+
+settings:
+  default_hard_exclude_action: "DISQUALIFY"
+  default_soft_exclude_action: "PENALIZE"
+  soft_exclude_penalty: 40
+  require_manual_override_for_hard_exclude: true
+
+lists:
+  parent_platforms:
+    - Authority Brands
+    - Neighborly
+    - BELFOR Franchise Group
+    - FirstService Brands
+    - Threshold Brands
+    - Empower Brands
+    - Premium Service Brands
+    - HorsePower Brands
+    - Home Franchise Concepts
+    - ServiceMaster Brands
+  hard_exclude_names:
+    - ARS Rescue Rooter
+    - Aire Serv
+    - Benjamin Franklin Plumbing
+    - CertaPro Painters
+    - Five Star Painting
+    - Glass Doctor
+    - Home Depot
+    - HouseMaster
+    - Lowe's
+    - Lowes
+    - Merry Maids
+    - Mighty Dog Roofing
+    - Mister Sparky Electric
+    - Mr. Appliance
+    - Mr. Electric
+    - Mr. Handyman
+    - Mr. Rooter
+    - Mr. Rooter Plumbing
+    - Mosquito Joe
+    - One Hour Heating & Air Conditioning
+    - Orkin
+    - Paul Davis Restoration
+    - Precision Garage Door Service
+    - PuroClean
+    - Rainbow Restoration
+    - Roto-Rooter
+    - Service Experts
+    - SERVPRO
+    - The Grounds Guys
+    - Terminix
+    - TruGreen
+  soft_exclude_names:
+    - Ace Handyman Services
+    - Bath Fitter
+    - Budget Blinds
+    - Chem-Dry
+    - College Hunks Hauling Junk
+    - Concrete Craft
+    - Dryer Vent Wizard
+    - Floor Coverings International
+    - Gotcha Covered
+    - Handyman Connection
+    - House Doctors
+    - Kitchen Tune-Up
+    - Lawn Doctor
+    - LeafFilter
+    - Molly Maid
+    - Mosquito Squad
+    - Mr. Gutter
+    - N-Hance
+    - Outdoor Lighting Perspectives
+    - The Cleaning Authority
+    - The Glass Guru
+    - Weed Man
+    - Window Genie
+  hard_exclude_domains:
+    - airserv.com
+    - ars.com
+    - benjaminfranklinplumbing.com
+    - certapro.com
+    - glassdoctor.com
+    - homedepot.com
+    - lowes.com
+    - mightydogroofing.com
+    - mistersparky.com
+    - mrelectric.com
+    - mrhandyman.com
+    - mrrooter.com
+    - mosquitojoe.com
+    - onehourheatandair.com
+    - orkin.com
+    - pauldavis.com
+    - precisiondoor.net
+    - puroclean.com
+    - rainbowrestores.com
+    - rotorooter.com
+    - servpro.com
+    - serviceexperts.com
+    - terminix.com
+    - thegroundsguys.com
+    - trugreen.com
+  soft_exclude_domains:
+    - acehandymanservices.com
+    - bathfitter.com
+    - budgetblinds.com
+    - chemdry.com
+    - collegehunkshaulingjunk.com
+    - concretecraft.com
+    - dryerventwizard.com
+    - floorcoveringsinternational.com
+    - gotchacovered.com
+    - handymanconnection.com
+    - housedocs.com
+    - kitchentuneup.com
+    - lawndoctor.com
+    - leaffilter.com
+    - mollymaid.com
+    - mosquitosquad.com
+    - nhance.com
+    - outdoorlights.com
+    - thecleaningauthority.com
+    - theglassguru.com
+    - weedman.com
+    - windowgenie.com
+  regex_hard_exclude:
+    - "\\bservpro\\b"
+    - "\\bmr\\s+rooter\\b"
+    - "\\bmister\\s+sparky\\b"
+    - "\\bone\\s+hour\\s+(heating|air|hvac)"
+    - "\\bprecision\\s+garage\\s+door\\b"
+    - "\\bmighty\\s+dog\\s+roofing\\b"
+    - "\\bpaul\\s+davis\\s+restoration\\b"
+    - "\\bmosquito\\s+joe\\b"
+    - "\\bthe\\s+grounds\\s+guys\\b"
+    - "\\bcerta\\s*pro\\s+painters\\b"
+    - "\\baire\\s+serv\\b"
+    - "\\broto\\s*-?\\s*rooter\\b"
+  regex_soft_exclude:
+    - "\\bace\\s+handyman\\s+services\\b"
+    - "\\bbath\\s+fitter\\b"
+    - "\\bleaf\\s*filter\\b"
+
+categories:
+  plumbing_hvac_electrical:
+    hard_exclude:
+      - ARS Rescue Rooter
+      - Aire Serv
+      - Benjamin Franklin Plumbing
+      - Mister Sparky Electric
+      - Mr. Electric
+      - Mr. Rooter
+      - Mr. Rooter Plumbing
+      - One Hour Heating & Air Conditioning
+      - Roto-Rooter
+      - Service Experts
+    soft_exclude:
+      - Dryer Vent Wizard
+  roofing_exteriors:
+    hard_exclude:
+      - Mighty Dog Roofing
+    soft_exclude:
+      - LeafFilter
+  garage_doors_storage:
+    hard_exclude:
+      - Precision Garage Door Service
+    soft_exclude: []
+  restoration_mitigation:
+    hard_exclude:
+      - Paul Davis Restoration
+      - PuroClean
+      - Rainbow Restoration
+      - SERVPRO
+    soft_exclude: []
+  pest_control:
+    hard_exclude:
+      - Mosquito Joe
+      - Orkin
+      - Terminix
+    soft_exclude:
+      - Mosquito Squad
+  tree_lawn_irrigation:
+    hard_exclude:
+      - The Grounds Guys
+      - TruGreen
+    soft_exclude:
+      - Lawn Doctor
+      - Weed Man
+  painting_handyman_remodeling:
+    hard_exclude:
+      - CertaPro Painters
+      - Five Star Painting
+      - Mr. Handyman
+    soft_exclude:
+      - Ace Handyman Services
+      - Handyman Connection
+      - House Doctors
+  windows_glass_screens:
+    hard_exclude:
+      - Glass Doctor
+    soft_exclude:
+      - The Glass Guru
+      - Window Genie
+  pool_services:
+    hard_exclude: []
+    soft_exclude: []
+  junk_cleaning_pressure:
+    hard_exclude:
+      - Merry Maids
+    soft_exclude:
+      - College Hunks Hauling Junk
+      - The Cleaning Authority
+  outdoor_lighting:
+    hard_exclude: []
+    soft_exclude:
+      - Outdoor Lighting Perspectives
+  bath_kitchen_flooring_surfaces:
+    hard_exclude: []
+    soft_exclude:
+      - Bath Fitter
+      - Concrete Craft
+      - Floor Coverings International
+      - Kitchen Tune-Up
+      - N-Hance
+  inspection_property_management:
+    hard_exclude:
+      - HouseMaster
+    soft_exclude: []
+  national_retail_corporate:
+    hard_exclude:
+      - Home Depot
+      - Lowe's
+      - Lowes
+    soft_exclude:
+      - Budget Blinds
+      - Gotcha Covered

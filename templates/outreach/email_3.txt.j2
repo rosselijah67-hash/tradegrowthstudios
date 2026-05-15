@@ -1,0 +1,26 @@
+Subject: {{ subject }}
+
+Hi {{ contact_first_name or contact_name or "there" }},
+
+{{ opening_line or "The other thing I would clean up on " ~ business_name ~ "'s site is the buyer path after the first screen." }}
+
+{% if issue_bullets %}
+I would focus here:
+{% for bullet in issue_bullets[:3] %}
+- {{ bullet }}
+{% endfor %}
+{% endif %}
+
+For {{ niche_label or "home-service" }} work, the site should make the main services, proof, and request path easy to connect.
+
+{% if public_packet_url and packet_line %}
+{{ packet_line }}
+
+{% endif %}
+{{ walkthrough_ask or "Would a short walkthrough be useful?" }}
+
+{{ opt_out_line }}
+
+-- 
+{{ sender_name or "Trade Growth Studio" }}
+{% if sender_company and sender_company != sender_name %}{{ sender_company }}{% endif %}

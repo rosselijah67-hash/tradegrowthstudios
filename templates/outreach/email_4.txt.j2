@@ -1,0 +1,20 @@
+Subject: {{ subject }}
+
+Hi {{ contact_first_name or contact_name or "there" }},
+
+I will keep this as my last note on {{ business_name }}.
+
+{% if issue_bullets %}
+The two things I would fix first:
+{% for bullet in issue_bullets[:2] %}
+- {{ bullet }}
+{% endfor %}
+{% endif %}
+
+If tightening the site path is useful, reply and I can walk through the fixes.
+
+{{ opt_out_line }}
+
+-- 
+{{ sender_name or "Trade Growth Studio" }}
+{% if sender_company and sender_company != sender_name %}{{ sender_company }}{% endif %}

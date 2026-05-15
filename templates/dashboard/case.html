@@ -1,0 +1,970 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}{{ prospect.business_name }} - Case File{% endblock %}
+
+{% block content %}
+{% set desktop = artifact_map.get('screenshot_desktop') %}
+{% set mobile = artifact_map.get('screenshot_mobile') %}
+{% set audit_card = artifact_map.get('audit_card') %}
+{% set homepage_preview = artifact_map.get('homepage_preview') %}
+{% set href = prospect.website_url|external_href %}
+{% set audit_mode = site_findings.get('audit_mode') or score_explanation.get('audit_mode') or 'deep' %}
+{% set franchise_exclusion = prospect.metadata.franchise_exclusion if prospect.metadata.franchise_exclusion is defined else {} %}
+
+{% if review_message %}
+<div class="notice success">{{ review_message }}</div>
+{% endif %}
+
+<section class="case-header">
+  <div>
+    <a class="back-link" href="{{ url_for('review_queue') }}">Back to review queue</a>
+    <h1>{{ prospect.business_name }}</h1>
+    <div class="case-meta">
+      <span>{{ prospect.market or "No market" }}</span>
+      <span>{{ prospect.niche or "No niche" }}</span>
+      <span>{{ prospect.pipeline_stage|pretty_label }}</span>
+      <span class="audit-mode-badge audit-mode-{{ audit_mode|lower }}">{{ "Fast Audit" if audit_mode == "fast" else "Deep Audit" }}</span>
+    </div>
+  </div>
+  <div class="case-header-actions">
+    {% if prospect.pipeline_stage in ["CONTACT_MADE", "CALL_BOOKED", "PROPOSAL_SENT", "CLOSED_WON"] %}
+    <a class="button primary" href="{{ url_for('sales_packet', prospect_id=prospect.id) }}">Sales Packet</a>
+    {% endif %}
+    {% if href %}
+    <a class="button" href="{{ href }}" target="_blank" rel="noopener noreferrer">Open Website</a>
+    {% endif %}
+  </div>
+</section>
+
+{% if franchise_exclusion and franchise_exclusion.is_excluded %}
+<section class="panel exclusion-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Franchise/National Chain Exclusion</h2>
+      <p>{{ franchise_exclusion.reason }}</p>
+    </div>
+    <span class="pill {{ 'status-fail' if franchise_exclusion.is_hard_exclude else 'status-warn' }}">
+      {{ "Hard Exclude" if franchise_exclusion.is_hard_exclude else "Soft Exclude" }}
+    </span>
+  </div>
+  <dl class="detail-list">
+    <div>
+      <dt>Recommended Action</dt>
+      <dd>{{ franchise_exclusion.recommended_action or "" }}</dd>
+    </div>
+    <div>
+      <dt>Matched Name</dt>
+      <dd>{{ franchise_exclusion.matched_name or "" }}</dd>
+    </div>
+    <div>
+      <dt>Matched Domain</dt>
+      <dd>{{ franchise_exclusion.matched_domain or "" }}</dd>
+    </div>
+    <div>
+      <dt>Matched Category</dt>
+      <dd>{{ franchise_exclusion.matched_category or "" }}</dd>
+    </div>
+    <div>
+      <dt>Confidence</dt>
+      <dd>{{ franchise_exclusion.confidence }}</dd>
+    </div>
+    {% if prospect.metadata.franchise_override %}
+    <div>
+      <dt>Manual Override</dt>
+      <dd>Enabled in metadata</dd>
+    </div>
+    {% endif %}
+  </dl>
+</section>
+{% endif %}
+
+<section class="case-grid case-grid-wide">
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Business</h2>
+    </div>
+    <dl class="detail-list">
+      <div>
+        <dt>Name</dt>
+        <dd>{{ prospect.business_name }}</dd>
+      </div>
+      <div>
+        <dt>Market</dt>
+        <dd>{{ prospect.market or "" }}</dd>
+      </div>
+      <div>
+        <dt>Niche</dt>
+        <dd>{{ prospect.niche or "" }}</dd>
+      </div>
+      <div>
+        <dt>City / State</dt>
+        <dd>{{ prospect.city or prospect.city_guess or "" }}{% if prospect.state or prospect.state_guess %}, {{
+          prospect.state or prospect.state_guess }}{% endif %}</dd>
+      </div>
+      <div>
+        <dt>Phone</dt>
+        <dd>{{ prospect.phone or "" }}</dd>
+      </div>
+      <div>
+        <dt>Website</dt>
+        <dd>{{ prospect.website_url or "" }}</dd>
+      </div>
+    </dl>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Places Signals</h2>
+    </div>
+    <dl class="detail-list score-list">
+      <div>
+        <dt>Rating</dt>
+        <dd>{{ prospect.rating if prospect.rating is not none else "" }}</dd>
+      </div>
+      <div>
+        <dt>Reviews</dt>
+        <dd>{{ prospect.user_rating_count if prospect.user_rating_count is not none else "" }}</dd>
+      </div>
+      <div>
+        <dt>Business Status</dt>
+        <dd>{{ prospect.business_status or "" }}</dd>
+      </div>
+    </dl>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Scores</h2>
+    </div>
+    <dl class="detail-list score-list">
+      <div>
+        <dt>Eligibility</dt>
+        <dd>{{ prospect.business_eligibility_score }}</dd>
+      </div>
+      <div>
+        <dt>Website Pain</dt>
+        <dd>{{ prospect.website_pain_score }}</dd>
+      </div>
+      <div>
+        <dt>Contactability</dt>
+        <dd>{{ prospect.contactability_score }}</dd>
+      </div>
+      <div>
+        <dt>Data Availability</dt>
+        <dd>{{ prospect.data_availability_score }}</dd>
+      </div>
+      <div>
+        <dt>Market Fit</dt>
+        <dd>{{ prospect.market_fit_score }}</dd>
+      </div>
+      <div>
+        <dt>Expected Close</dt>
+        <dd>{{ prospect.expected_close_score }}</dd>
+      </div>
+      <div>
+        <dt>Next Action</dt>
+        <dd>{{ prospect.next_action or "" }}</dd>
+      </div>
+    </dl>
+  </div>
+
+  <form class="panel review-form" method="post" action="{{ url_for('record_case_review', prospect_id=prospect.id) }}">
+    <div class="panel-header">
+      <h2>Manual Review</h2>
+    </div>
+    <label>
+      <span>Visual score</span>
+      <input type="number" name="human_review_score" min="0" max="100"
+        value="{{ prospect.human_review_score if prospect.human_review_score is not none else '' }}">
+    </label>
+    <label>
+      <span>Primary email</span>
+      <input name="primary_email" list="email-candidates" value="{{ email_candidates[0] if email_candidates else '' }}"
+        placeholder="name@example.com">
+      <datalist id="email-candidates">
+        {% for email in email_candidates %}
+        <option value="{{ email }}"></option>
+        {% endfor %}
+      </datalist>
+    </label>
+    <label>
+      <span>Contact role</span>
+      <input name="contact_role" value="owner/operator candidate">
+    </label>
+    <label>
+      <span>Notes</span>
+      <textarea name="human_review_notes" rows="5">{{ prospect.human_review_notes or "" }}</textarea>
+    </label>
+    {% if not email_candidates %}
+    <p class="missing-state">No email candidate found. Approval is allowed, but no contact will be saved unless an email
+      is entered.</p>
+    {% endif %}
+    <div class="review-actions">
+      <button class="button primary" type="submit" name="action" value="approve">Approve for Outreach</button>
+      <button class="button danger" type="submit" name="action" value="reject">Reject / Discard</button>
+      <button class="button" type="submit" name="action" value="hold">Hold for Later</button>
+    </div>
+  </form>
+</section>
+
+<section class="case-crm-grid">
+  <form class="panel crm-stage-form" method="post" action="{{ url_for('update_case_stage', prospect_id=prospect.id) }}">
+    <div class="panel-header">
+      <div>
+        <h2>CRM Stage</h2>
+        <p>{{ prospect.pipeline_stage|pretty_label }}</p>
+      </div>
+    </div>
+    <label>
+      <span>Stage</span>
+      <select name="new_status">
+        {% for stage, label in crm_stages %}
+        <option value="{{ stage }}" {% if prospect.pipeline_stage==stage %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      <span>Stage change note</span>
+      <textarea name="stage_note" rows="3" placeholder="Optional context for the change"></textarea>
+    </label>
+    <button class="button primary" type="submit">Update Stage</button>
+  </form>
+
+  <div class="panel contact-panel">
+    <div class="panel-header">
+      <h2>Contacts</h2>
+    </div>
+    <div class="contact-list">
+      {% for contact in contacts %}
+      <article class="contact-item">
+        <div>
+          <strong>{{ contact.name or contact.email or contact.phone or "Unnamed contact" }}</strong>
+          <p>{{ contact.role or "No role" }}{% if contact.is_primary %} - Primary{% endif %}</p>
+        </div>
+        <dl class="detail-list">
+          <div>
+            <dt>Email</dt>
+            <dd>{{ contact.email or "Missing" }}</dd>
+          </div>
+          <div>
+            <dt>Phone</dt>
+            <dd>{{ contact.phone or "Missing" }}</dd>
+          </div>
+          {% if contact.metadata.notes is defined and contact.metadata.notes %}
+          <div>
+            <dt>Notes</dt>
+            <dd>{{ contact.metadata.notes }}</dd>
+          </div>
+          {% endif %}
+        </dl>
+      </article>
+      {% else %}
+      <p class="empty">No contacts saved yet.</p>
+      {% endfor %}
+    </div>
+    <form class="contact-form" method="post" action="{{ url_for('save_case_contact', prospect_id=prospect.id) }}">
+      <input type="hidden" name="contact_id" value="{{ primary_contact.id if primary_contact else '' }}">
+      <label>
+        <span>Name</span>
+        <input name="contact_name" value="{{ primary_contact.name if primary_contact else '' }}">
+      </label>
+      <label>
+        <span>Role</span>
+        <input name="contact_role" value="{{ primary_contact.role if primary_contact else '' }}"
+          placeholder="owner/operator candidate">
+      </label>
+      <label>
+        <span>Email</span>
+        <input name="contact_email" value="{{ primary_contact.email if primary_contact else '' }}"
+          placeholder="name@example.com">
+      </label>
+      <label>
+        <span>Phone</span>
+        <input name="contact_phone" value="{{ primary_contact.phone if primary_contact else '' }}">
+      </label>
+      <label class="contact-notes-field">
+        <span>Notes</span>
+        <textarea name="contact_notes"
+          rows="3">{{ primary_contact.metadata.notes if primary_contact and primary_contact.metadata.notes is defined else '' }}</textarea>
+      </label>
+      <button class="button primary" type="submit">Save Primary Contact</button>
+    </form>
+  </div>
+</section>
+
+<section class="panel stage-history-panel">
+  <div class="panel-header">
+    <h2>Stage History</h2>
+  </div>
+  <div class="timeline-list">
+    {% for event in stage_history %}
+    <article class="timeline-item">
+      <div>
+        <strong>{{ event.event_type|pretty_label }}</strong>
+        <p>{{ event.created_at or event.updated_at or "" }}</p>
+      </div>
+      <dl class="detail-list">
+        <div>
+          <dt>Status</dt>
+          <dd>{{ event.status }}</dd>
+        </div>
+        {% if event.subject %}<div>
+          <dt>Subject</dt>
+          <dd>{{ event.subject }}</dd>
+        </div>{% endif %}
+        {% if event.metadata.old_status is defined or event.metadata.new_status is defined %}
+        <div>
+          <dt>Change</dt>
+          <dd>{{ event.metadata.old_status or "None" }} -> {{ event.metadata.new_status or event.status }}</dd>
+        </div>
+        {% endif %}
+        {% if event.metadata.note is defined and event.metadata.note %}
+        <div>
+          <dt>Note</dt>
+          <dd>{{ event.metadata.note }}</dd>
+        </div>
+        {% endif %}
+        {% if event.metadata.recipient is defined and event.metadata.recipient %}
+        <div>
+          <dt>Recipient</dt>
+          <dd>{{ event.metadata.recipient }}</dd>
+        </div>
+        {% endif %}
+      </dl>
+    </article>
+    {% else %}
+    <p class="empty">No CRM stage changes or email events logged yet.</p>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="summary-grid">
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Score Reasons</h2>
+    </div>
+    <div class="reason-list">
+      {% for reason in top_reasons %}
+      <div>
+        <strong>{{ reason.points if reason.points is defined else "" }}</strong>
+        <span>{{ reason.reason if reason.reason is defined else reason }}</span>
+      </div>
+      {% else %}
+      <p class="empty">No score reasons recorded.</p>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Contact Signals</h2>
+    </div>
+    <dl class="detail-list">
+      <div>
+        <dt>Email Candidates</dt>
+        <dd>{{ email_candidates|join(", ") if email_candidates else "Missing" }}</dd>
+      </div>
+      <div>
+        <dt>Business-Domain Emails</dt>
+        <dd>{{ business_domain_emails|join(", ") if business_domain_emails else "Missing" }}</dd>
+      </div>
+      <div>
+        <dt>Mobile PageSpeed</dt>
+        <dd>{{ signals.mobile_pagespeed_score if signals.mobile_pagespeed_score is defined else "" }} {{
+          signals.mobile_pagespeed_status if signals.mobile_pagespeed_status is defined else "" }} {{
+          signals.mobile_pagespeed_source if signals.mobile_pagespeed_source is defined else "" }}</dd>
+      </div>
+      <div>
+        <dt>Desktop PageSpeed</dt>
+        <dd>{{ signals.desktop_pagespeed_score if signals.desktop_pagespeed_score is defined else "" }} {{
+          signals.desktop_pagespeed_status if signals.desktop_pagespeed_status is defined else "" }} {{
+          signals.desktop_pagespeed_source if signals.desktop_pagespeed_source is defined else "" }}</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section class="panel outreach-drafts-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Outreach Drafts</h2>
+      <p>Review and canonize the local draft artifact before queue review. No email is sent from this page.</p>
+    </div>
+    <form class="draft-regenerate-form" method="post"
+      action="{{ url_for('regenerate_case_outreach_drafts', prospect_id=prospect.id) }}">
+      <label>
+        <span>Style</span>
+        <select name="style">
+          {% set current_style = step_one_draft.style if step_one_draft else 'owner_friendly' %}
+          <option value="owner_friendly" {% if current_style == 'owner_friendly' %}selected{% endif %}>Owner friendly</option>
+          <option value="direct" {% if current_style == 'direct' %}selected{% endif %}>Direct</option>
+          <option value="technical" {% if current_style == 'technical' %}selected{% endif %}>Technical</option>
+        </select>
+      </label>
+      <label>
+        <span>Variant</span>
+        <input type="number" name="variant_index" value="{{ step_one_draft.variant_index if step_one_draft else 0 }}">
+      </label>
+      <label>
+        <span>Drafts</span>
+        <select name="step">
+          <option value="1" selected>Step 1 only</option>
+          <option value="all">All steps</option>
+        </select>
+      </label>
+      <label class="checkbox-row">
+        <input type="checkbox" name="force" value="1" checked>
+        <span>Force rewrite</span>
+      </label>
+      <button class="button primary" type="submit">Generate / Regenerate</button>
+    </form>
+  </div>
+  <p class="warning-text">First live batch should send Step 1 only. Do not automate follow-ups until replies/unsubscribes are stable.</p>
+
+  <div class="email-draft-list">
+    {% if step_one_draft %}
+    {% set draft = step_one_draft %}
+    <article class="email-draft email-draft-primary">
+      <form class="draft-edit-form" method="post"
+        action="{{ url_for('save_case_outreach_draft', prospect_id=prospect.id, step=draft.step) }}">
+      <div class="email-draft-heading">
+        <div>
+          <h3>Step 1 Draft</h3>
+          <p>Primary live-send draft. Saving here updates the artifact used later by queue/send review.</p>
+        </div>
+        <div class="draft-heading-pills">
+          {% if draft.ready_for_queue_review %}
+          <span class="pill status-pass">Ready for queue review</span>
+          {% endif %}
+          {% if draft.manual_edited %}
+          <span class="pill">Manually edited</span>
+          {% endif %}
+          <span class="pill">{{ draft.status }}</span>
+        </div>
+      </div>
+
+      <div class="draft-status-grid">
+        <div>
+          <span>Recipient</span>
+          <strong>{{ draft.metadata.recipient_email or "Missing email" }}</strong>
+        </div>
+        <div>
+          <span>Public Packet</span>
+          <strong>{{ draft.public_packet_status_label }}</strong>
+          {% if draft.public_packet_url %}
+          <small>{{ draft.public_packet_url }}</small>
+          {% endif %}
+        </div>
+        <div>
+          <span>Copy Style</span>
+          <strong>{{ draft.style|pretty_label }}</strong>
+          <small>variant {{ draft.variant_index }}</small>
+        </div>
+        <div>
+          <span>Quality Flags</span>
+          <strong>{{ draft.copy_flag_labels|length }}</strong>
+          <small>{{ "Needs review" if draft.copy_flag_labels else "No warnings" }}</small>
+        </div>
+      </div>
+
+      {% if draft.copy_flag_labels %}
+      <div class="copy-warning-list" aria-label="Copy quality warnings">
+        {% for flag in draft.copy_flag_labels %}
+        <span class="warning-chip">{{ flag }}</span>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <div class="draft-issue-box">
+        <h4>Selected Issues Used</h4>
+        <ul>
+          {% for issue in draft.selected_issues %}
+          <li>
+            <strong>{{ issue.short_bullet or issue.key or issue.category or "Issue" }}</strong>
+            <small>{{ issue.source or "source unknown" }}{% if issue.confidence %} - {{ issue.confidence }} confidence{% endif %}</small>
+          </li>
+          {% else %}
+          <li>No selected issue metadata stored for this draft.</li>
+          {% endfor %}
+        </ul>
+      </div>
+
+      <label>
+        <span>Subject</span>
+        <input type="text" name="subject" value="{{ draft.subject or draft.metadata.subject or '' }}" required>
+      </label>
+      <label>
+        <span>Body</span>
+        <textarea class="draft-body-textarea" name="body" rows="16" required>{{ draft.body }}</textarea>
+      </label>
+      <div class="draft-edit-actions">
+        <button class="button primary" type="submit">Save Draft to Pipeline</button>
+        {% if draft.file_url %}
+        <a class="table-action" href="{{ draft.file_url }}" target="_blank" rel="noopener noreferrer">Open Text File</a>
+        {% endif %}
+      </div>
+      </form>
+    </article>
+    {% else %}
+    <div class="email-draft email-draft-primary">
+      <p class="empty">No Step 1 draft generated yet. Use Generate / Regenerate above to create local drafts.</p>
+    </div>
+    {% endif %}
+
+    {% if followup_drafts %}
+    <details class="draft-followups">
+      <summary>Follow-up drafts ({{ followup_drafts|length }})</summary>
+      {% for draft in followup_drafts %}
+      <article class="email-draft email-draft-secondary">
+        <form class="draft-edit-form" method="post"
+          action="{{ url_for('save_case_outreach_draft', prospect_id=prospect.id, step=draft.step) }}">
+        <div class="email-draft-heading">
+          <div>
+            <h3>Email {{ draft.step or loop.index }}</h3>
+            <p>Secondary follow-up draft. Not queued automatically.</p>
+          </div>
+          <div class="draft-heading-pills">
+            {% if draft.manual_edited %}
+            <span class="pill">Manually edited</span>
+            {% endif %}
+            <span class="pill">{{ draft.status }}</span>
+          </div>
+        </div>
+
+        <div class="draft-status-grid compact">
+          <div>
+            <span>Recipient</span>
+            <strong>{{ draft.metadata.recipient_email or "Missing email" }}</strong>
+          </div>
+          <div>
+            <span>Packet</span>
+            <strong>{{ draft.public_packet_status_label }}</strong>
+          </div>
+          <div>
+            <span>Style</span>
+            <strong>{{ draft.style|pretty_label }}</strong>
+            <small>variant {{ draft.variant_index }}</small>
+          </div>
+          <div>
+            <span>Flags</span>
+            <strong>{{ draft.copy_flag_labels|length }}</strong>
+          </div>
+        </div>
+
+        {% if draft.copy_flag_labels %}
+        <div class="copy-warning-list" aria-label="Copy quality warnings">
+          {% for flag in draft.copy_flag_labels %}
+          <span class="warning-chip">{{ flag }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="draft-issue-box">
+          <h4>Selected Issues Used</h4>
+          <ul>
+            {% for issue in draft.selected_issues %}
+            <li>
+              <strong>{{ issue.short_bullet or issue.key or issue.category or "Issue" }}</strong>
+              <small>{{ issue.source or "source unknown" }}{% if issue.confidence %} - {{ issue.confidence }} confidence{% endif %}</small>
+            </li>
+            {% else %}
+            <li>No selected issue metadata stored for this draft.</li>
+            {% endfor %}
+          </ul>
+        </div>
+
+        <label>
+          <span>Subject</span>
+          <input type="text" name="subject" value="{{ draft.subject or draft.metadata.subject or '' }}" required>
+        </label>
+        <label>
+          <span>Body</span>
+          <textarea class="draft-body-textarea" name="body" rows="10" required>{{ draft.body }}</textarea>
+        </label>
+        <div class="draft-edit-actions">
+          <button class="button" type="submit">Save Draft</button>
+          {% if draft.file_url %}
+          <a class="table-action" href="{{ draft.file_url }}" target="_blank" rel="noopener noreferrer">Open Text File</a>
+          {% endif %}
+        </div>
+        </form>
+      </article>
+      {% endfor %}
+    </details>
+    {% elif step_one_draft %}
+    <p class="empty">No follow-up drafts generated yet.</p>
+    {% endif %}
+    {% if not outreach_drafts %}
+    <p class="empty">No outreach drafts generated yet.</p>
+    {% endif %}
+  </div>
+</section>
+
+<section class="media-section case-screenshots" id="case-screenshots">
+  <div class="section-header">
+    <h2>Screenshots</h2>
+    <div class="link-actions">
+      <a class="button" href="#visual-critique">Jump to Visual Critique</a>
+      {% if audit_card and audit_card.file_url %}
+      <a href="{{ audit_card.file_url }}" target="_blank" rel="noopener noreferrer">Open Audit Card</a>
+      {% else %}
+      <span class="missing-state">Audit card missing</span>
+      {% endif %}
+      {% if homepage_preview and homepage_preview.file_url %}
+      <a href="{{ homepage_preview.file_url }}" target="_blank" rel="noopener noreferrer">Open Homepage Preview</a>
+      {% else %}
+      <span class="missing-state">Homepage preview missing</span>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="case-screenshot-grid">
+    <figure class="case-screenshot-panel case-screenshot-panel-desktop" data-screenshot-viewer>
+      <figcaption class="case-screenshot-heading">
+        <div>
+          <h3>Desktop Screenshot</h3>
+          <small>{{ desktop.status if desktop and desktop.status else ("available" if desktop and desktop.file_exists
+            else "missing") }}</small>
+        </div>
+        {% if desktop and desktop.file_url and desktop.file_exists %}
+        <a class="button" href="{{ desktop.file_url }}" target="_blank" rel="noopener noreferrer">Open Full Image</a>
+        {% endif %}
+      </figcaption>
+      {% if desktop and desktop.file_url and desktop.file_exists %}
+      <div class="case-screenshot-toolbar" aria-label="Desktop screenshot controls">
+        <button class="button is-active" type="button" data-screenshot-action="fit">Fit Width</button>
+        <button class="button" type="button" data-screenshot-action="natural">Natural Size</button>
+        <div class="zoom-controls" aria-label="Desktop screenshot zoom">
+          <button class="button" type="button" data-screenshot-zoom="50">50%</button>
+          <button class="button" type="button" data-screenshot-zoom="75">75%</button>
+          <button class="button" type="button" data-screenshot-zoom="100">100%</button>
+          <button class="button" type="button" data-screenshot-zoom="125">125%</button>
+          <button class="button" type="button" data-screenshot-zoom="150">150%</button>
+        </div>
+      </div>
+      <div class="case-screenshot-viewport" tabindex="0">
+        <img class="case-screenshot-image is-fit" data-screenshot-image src="{{ desktop.file_url }}"
+          alt="Desktop screenshot for {{ prospect.business_name }}">
+      </div>
+      {% else %}
+      <div class="missing-image">Desktop screenshot missing</div>
+      {% endif %}
+    </figure>
+
+    <figure class="case-screenshot-panel case-screenshot-panel-mobile" data-screenshot-viewer>
+      <figcaption class="case-screenshot-heading">
+        <div>
+          <h3>Mobile Screenshot</h3>
+          <small>{{ mobile.status if mobile and mobile.status else ("available" if mobile and mobile.file_exists else
+            "missing") }}</small>
+        </div>
+        {% if mobile and mobile.file_url and mobile.file_exists %}
+        <a class="button" href="{{ mobile.file_url }}" target="_blank" rel="noopener noreferrer">Open Full Image</a>
+        {% endif %}
+      </figcaption>
+      {% if mobile and mobile.file_url and mobile.file_exists %}
+      <div class="case-screenshot-toolbar" aria-label="Mobile screenshot controls">
+        <button class="button is-active" type="button" data-screenshot-action="fit">Fit Width</button>
+        <button class="button" type="button" data-screenshot-action="natural">Natural Size</button>
+        <div class="zoom-controls" aria-label="Mobile screenshot zoom">
+          <button class="button" type="button" data-screenshot-zoom="50">50%</button>
+          <button class="button" type="button" data-screenshot-zoom="75">75%</button>
+          <button class="button" type="button" data-screenshot-zoom="100">100%</button>
+          <button class="button" type="button" data-screenshot-zoom="125">125%</button>
+          <button class="button" type="button" data-screenshot-zoom="150">150%</button>
+        </div>
+      </div>
+      <div class="case-screenshot-viewport" tabindex="0">
+        <img class="case-screenshot-image is-fit" data-screenshot-image src="{{ mobile.file_url }}"
+          alt="Mobile screenshot for {{ prospect.business_name }}">
+      </div>
+      {% else %}
+      <div class="missing-image">Mobile screenshot missing</div>
+      {% endif %}
+    </figure>
+  </div>
+</section>
+
+<section class="panel visual-review-panel" id="visual-critique">
+  <div class="panel-header">
+    <div>
+      <a class="back-link" href="#case-screenshots">Back to screenshots</a>
+      <h2>Visual Critique</h2>
+    </div>
+    <div class="review-actions">
+      {% if visual_review %}
+      <span class="pill">{{ visual_review.score if visual_review.score is not none else "No score" }}</span>
+      {% endif %}
+    </div>
+  </div>
+
+  {% if visual_review %}
+  <div class="saved-critique">
+    <p>{{ visual_review.summary }}</p>
+    <div class="critique-top-list">
+      {% for issue in top_visual_issues %}
+      <article>
+        <strong>{{ issue.severity }}</strong>
+        <div>
+          <h3>{{ issue.label }}</h3>
+          {% if issue.evidence_area %}<p>{{ issue.evidence_area }}</p>{% endif %}
+          {% if issue.note %}<p>{{ issue.note }}</p>{% endif %}
+          {% if issue.email_safe_claim %}<p>{{ issue.email_safe_claim }}</p>{% endif %}
+        </div>
+      </article>
+      {% else %}
+      <p class="empty">No high-severity visual issues saved yet.</p>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <form class="visual-review-form" method="post"
+    action="{{ url_for('record_visual_review', prospect_id=prospect.id) }}">
+    <label class="visual-score-field">
+      <span>Overall visual score</span>
+      <input type="number" name="visual_total_score" min="0" max="100"
+        value="{{ visual_findings.visual_total_score if visual_findings.visual_total_score is defined and visual_findings.visual_total_score is not none else '' }}">
+    </label>
+
+    <div class="visual-issue-grid">
+      {% for key, label in visual_issue_categories %}
+      {% set issue = visual_issue_map.get(key) or {} %}
+      <fieldset class="visual-issue-card">
+        <legend>{{ label }}</legend>
+        <label class="check-row">
+          <input type="checkbox" name="{{ key }}_present" value="1" {% if issue.present %}checked{% endif %}>
+          <span>Present</span>
+        </label>
+        <label>
+          <span>Severity</span>
+          <select name="{{ key }}_severity">
+            {% for severity in range(0, 6) %}
+            <option value="{{ severity }}" {% if issue.severity is defined and issue.severity==severity %}selected{%
+              elif issue.severity is not defined and severity==0 %}selected{% endif %}>{{ severity }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>
+          <span>Evidence area</span>
+          <input name="{{ key }}_evidence_area"
+            value="{{ issue.evidence_area if issue.evidence_area is defined else '' }}"
+            placeholder="desktop hero, mobile header">
+        </label>
+        <label>
+          <span>Note</span>
+          <textarea name="{{ key }}_note" rows="3">{{ issue.note if issue.note is defined else '' }}</textarea>
+        </label>
+      </fieldset>
+      {% endfor %}
+    </div>
+
+    <div class="review-actions">
+      <button class="button primary" type="submit">Save Visual Review</button>
+    </div>
+  </form>
+</section>
+
+<script>
+  (() => {
+    const viewers = document.querySelectorAll("[data-screenshot-viewer]");
+
+    const setActive = (viewer, selector, value) => {
+      viewer.querySelectorAll(selector).forEach((button) => {
+        const isAction = button.dataset.screenshotAction === value;
+        const isZoom = button.dataset.screenshotZoom === value;
+        button.classList.toggle("is-active", isAction || isZoom);
+      });
+    };
+
+    const withNaturalSize = (image, callback) => {
+      if (image.complete && image.naturalWidth) {
+        callback();
+        return;
+      }
+      image.addEventListener("load", callback, { once: true });
+    };
+
+    viewers.forEach((viewer) => {
+      const image = viewer.querySelector("[data-screenshot-image]");
+      if (!image) {
+        return;
+      }
+
+      viewer.addEventListener("click", (event) => {
+        const control = event.target.closest("[data-screenshot-action], [data-screenshot-zoom]");
+        if (!control || !viewer.contains(control)) {
+          return;
+        }
+
+        const action = control.dataset.screenshotAction;
+        const zoom = control.dataset.screenshotZoom;
+
+        if (action === "fit") {
+          image.classList.add("is-fit");
+          image.style.width = "100%";
+          setActive(viewer, "[data-screenshot-action]", "fit");
+          setActive(viewer, "[data-screenshot-zoom]", "");
+          return;
+        }
+
+        if (action === "natural") {
+          withNaturalSize(image, () => {
+            image.classList.remove("is-fit");
+            image.style.width = `${image.naturalWidth}px`;
+          });
+          setActive(viewer, "[data-screenshot-action]", "natural");
+          setActive(viewer, "[data-screenshot-zoom]", "");
+          return;
+        }
+
+        if (zoom) {
+          withNaturalSize(image, () => {
+            const scale = Number(zoom) / 100;
+            image.classList.remove("is-fit");
+            image.style.width = `${Math.max(1, Math.round(image.naturalWidth * scale))}px`;
+          });
+          setActive(viewer, "[data-screenshot-action]", "");
+          setActive(viewer, "[data-screenshot-zoom]", zoom);
+        }
+      });
+    });
+  })();
+</script>
+
+<section class="case-grid">
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Site Audit</h2>
+    </div>
+    {% if site_audit %}
+    <p>{{ site_audit.summary or "" }}</p>
+    <dl class="detail-list">
+      <div>
+        <dt>Status</dt>
+        <dd>{{ site_audit.status }}</dd>
+      </div>
+      <div>
+        <dt>Audited</dt>
+        <dd>{{ site_audit.audited_at or "" }}</dd>
+      </div>
+    </dl>
+    {% else %}
+    <p class="empty">Site audit missing.</p>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Phones And Emails</h2>
+    </div>
+    <dl class="detail-list">
+      <div>
+        <dt>Tel Links</dt>
+        <dd>{{ site_findings.tel_links|join(", ") if site_findings.tel_links is defined and site_findings.tel_links else
+          "Missing" }}</dd>
+      </div>
+      <div>
+        <dt>Visible Phones</dt>
+        <dd>{{ site_findings.visible_phone_numbers|join(", ") if site_findings.visible_phone_numbers is defined and
+          site_findings.visible_phone_numbers else "Missing" }}</dd>
+      </div>
+      <div>
+        <dt>Mailto Emails</dt>
+        <dd>{{ site_findings.mailto_emails|join(", ") if site_findings.mailto_emails is defined and
+          site_findings.mailto_emails else "Missing" }}</dd>
+      </div>
+      <div>
+        <dt>Visible Emails</dt>
+        <dd>{{ site_findings.visible_emails|join(", ") if site_findings.visible_emails is defined and
+          site_findings.visible_emails else "Missing" }}</dd>
+      </div>
+    </dl>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Forms And Links</h2>
+    </div>
+    <dl class="detail-list">
+      <div>
+        <dt>Forms</dt>
+        <dd>{{ site_findings.forms|length if site_findings.forms is defined and site_findings.forms else 0 }}</dd>
+      </div>
+      <div>
+        <dt>Service Links</dt>
+        <dd>{{ site_findings.service_page_links|length if site_findings.service_page_links is defined and
+          site_findings.service_page_links else 0 }}</dd>
+      </div>
+      <div>
+        <dt>Contact Links</dt>
+        <dd>{{ site_findings.contact_page_links|length if site_findings.contact_page_links is defined and
+          site_findings.contact_page_links else 0 }}</dd>
+      </div>
+      <div>
+        <dt>About Links</dt>
+        <dd>{{ site_findings.about_page_links|length if site_findings.about_page_links is defined and
+          site_findings.about_page_links else 0 }}</dd>
+      </div>
+    </dl>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Tracking And Schema</h2>
+    </div>
+    <dl class="detail-list">
+      <div>
+        <dt>GA / GTAG</dt>
+        <dd>{{ "Yes" if site_findings.tracking is defined and site_findings.tracking.has_ga4_or_gtag else "No" }}</dd>
+      </div>
+      <div>
+        <dt>GTM</dt>
+        <dd>{{ "Yes" if site_findings.tracking is defined and site_findings.tracking.has_gtm else "No" }}</dd>
+      </div>
+      <div>
+        <dt>Facebook Pixel</dt>
+        <dd>{{ "Yes" if site_findings.tracking is defined and site_findings.tracking.has_facebook_pixel else "No" }}
+        </dd>
+      </div>
+      <div>
+        <dt>Schema Types</dt>
+        <dd>{{ site_findings.schema.types|join(", ") if site_findings.schema is defined and site_findings.schema.types
+          else "Missing" }}</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>Audit Rows</h2>
+  </div>
+  <div class="audit-list">
+    {% for audit in audits %}
+    <article class="audit-item">
+      <div>
+        <h3>{{ audit.audit_type|pretty_label }}</h3>
+        <p>{{ audit.summary or "" }}</p>
+      </div>
+      <dl>
+        <div>
+          <dt>Status</dt>
+          <dd>{{ audit.status }}</dd>
+        </div>
+        <div>
+          <dt>Score</dt>
+          <dd>{{ audit.score if audit.score is not none else "" }}</dd>
+        </div>
+        <div>
+          <dt>Audited</dt>
+          <dd>{{ audit.audited_at or "" }}</dd>
+        </div>
+      </dl>
+    </article>
+    {% else %}
+    <p class="empty">No audits found.</p>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,32 @@
+preferred_niches:
+  - roofing
+  - hvac
+  - plumbing
+  - electrical
+  - garage_doors
+
+franchise_keywords:
+  - "Lowe's"
+  - Lowes
+  - Home Depot
+  - ARS
+  - Roto-Rooter
+  - Mr. Rooter
+  - One Hour
+  - Benjamin Franklin
+  - Service Experts
+  - Aire Serv
+  - Terminix
+  - Orkin
+  - TruGreen
+
+eligibility:
+  min_business_eligibility_score: 35
+  min_contactability_score: 2
+  min_data_availability_score: 3
+
+next_actions:
+  discard_below: 45
+  hold_below: 60
+  audit_artifact_below: 75
+  homepage_preview_below: 85

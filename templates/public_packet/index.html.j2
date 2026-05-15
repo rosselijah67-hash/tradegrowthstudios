@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="robots" content="noindex,nofollow">
+    <title>{{ business_name }} Website Audit Draft</title>
+    <link rel="stylesheet" href="{{ css_href }}">
+  </head>
+  <body>
+    <main class="packet-shell">
+      <header class="packet-header">
+        <p class="packet-kicker">Private website audit draft</p>
+        <h1>{{ business_name }}</h1>
+        <p class="packet-disclaimer">
+          Private website audit draft for discussion. This page is not affiliated with or published by {{ business_name }}.
+        </p>
+        <dl class="packet-meta" aria-label="Audit details">
+          <div>
+            <dt>Website</dt>
+            <dd>
+              {% if website_url %}
+                <a href="{{ website_href }}" rel="nofollow noopener noreferrer">{{ website_url }}</a>
+              {% else %}
+                Not available
+              {% endif %}
+            </dd>
+          </div>
+          <div>
+            <dt>Audit Date</dt>
+            <dd>{{ audit_date or "Not available" }}</dd>
+          </div>
+        </dl>
+      </header>
+
+      <section class="packet-section" aria-labelledby="issues-heading">
+        <div class="section-heading">
+          <p class="packet-kicker">Observed opportunities</p>
+          <h2 id="issues-heading">Top Items To Review</h2>
+        </div>
+        <div class="issue-list">
+          {% for issue in issues %}
+            <article class="issue-card">
+              <div class="issue-number">{{ loop.index }}</div>
+              <div>
+                <h3>{{ issue.title }}</h3>
+                <p class="issue-evidence">{{ issue.evidence }}</p>
+                <p>{{ issue.recommendation }}</p>
+              </div>
+            </article>
+          {% endfor %}
+        </div>
+      </section>
+
+      <section class="packet-section" aria-labelledby="screenshots-heading">
+        <div class="section-heading">
+          <p class="packet-kicker">Current site snapshots</p>
+          <h2 id="screenshots-heading">Desktop And Mobile Screenshots</h2>
+        </div>
+        <div class="screenshot-grid">
+          <figure class="screenshot-panel screenshot-panel-desktop">
+            <figcaption>Desktop</figcaption>
+            {% if screenshots.desktop %}
+              <img src="{{ screenshots.desktop }}" alt="{{ business_name }} desktop website screenshot">
+            {% else %}
+              <div class="missing-screenshot">Desktop screenshot not available in this packet.</div>
+            {% endif %}
+          </figure>
+          <figure class="screenshot-panel screenshot-panel-mobile">
+            <figcaption>Mobile</figcaption>
+            {% if screenshots.mobile %}
+              <img src="{{ screenshots.mobile }}" alt="{{ business_name }} mobile website screenshot">
+            {% else %}
+              <div class="missing-screenshot">Mobile screenshot not available in this packet.</div>
+            {% endif %}
+          </figure>
+        </div>
+      </section>
+
+      <section class="packet-section improvement-map" aria-labelledby="map-heading">
+        <div class="section-heading">
+          <p class="packet-kicker">Suggested sequence</p>
+          <h2 id="map-heading">Recommended Improvement Map</h2>
+        </div>
+        <ol>
+          {% for issue in issues[:3] %}
+            <li>
+              <strong>{{ issue.title }}:</strong>
+              {{ issue.recommendation }}
+            </li>
+          {% endfor %}
+        </ol>
+      </section>
+
+      <footer class="packet-footer">
+        <p>Reply to the email if you want a short walkthrough.</p>
+      </footer>
+    </main>
+  </body>
+</html>

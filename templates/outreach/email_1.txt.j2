@@ -1,0 +1,26 @@
+Subject: {{ subject }}
+
+Hi {{ contact_first_name or contact_name or "there" }},
+
+{{ opening_line or "I looked through " ~ business_name ~ "'s public website and a few fixable items stood out." }}
+
+{% if public_packet_url and packet_line %}
+{{ packet_line }}
+
+{% endif %}
+{% if issue_bullets %}
+I would start with:
+{% for bullet in issue_bullets[:4] %}
+- {{ bullet }}
+{% endfor %}
+{% endif %}
+
+{{ interpretation_line or "The useful part is making the site easier to understand, trust, and act on from a phone." }}
+
+{{ walkthrough_ask or "Worth a short walkthrough?" }}
+
+{{ opt_out_line }}
+
+-- 
+{{ sender_name or "Trade Growth Studio" }}
+{% if sender_company and sender_company != sender_name %}{{ sender_company }}{% endif %}

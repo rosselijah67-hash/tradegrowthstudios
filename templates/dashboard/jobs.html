@@ -1,0 +1,127 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Jobs - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <h1>Jobs</h1>
+    <p>Run explicit, whitelisted local pipeline jobs. No outreach jobs are available here.</p>
+  </div>
+</section>
+
+{% if message %}
+  <div class="notice {{ message.status }}">{{ message.message }}</div>
+{% endif %}
+
+<section class="pipeline-grid" aria-label="Dashboard job controls">
+  {% for job_type, job in job_types.items() %}
+    <form class="panel pipeline-job-card" method="post" action="{{ url_for('start_dashboard_job') }}">
+      <input type="hidden" name="job_type" value="{{ job_type }}">
+      <div class="panel-header">
+        <div>
+          <h2>{{ job.label }}</h2>
+          <p>{{ job.description }}</p>
+        </div>
+      </div>
+
+      {% if job.external %}
+        <p class="warning-text">
+          This job can call external websites or APIs. Keep the limit tight and confirm before running live.
+        </p>
+        {% if job_type == "places_pull" %}
+          <p class="warning-text">
+            Places dry runs still call Google Places; dry run only avoids writing prospects to SQLite.
+          </p>
+          <p class="warning-text">
+            Places Pull requires one configured market and one niche.
+          </p>
+        {% endif %}
+      {% endif %}
+
+      <label>
+        <span>Market</span>
+        <select name="market" {% if job_type == "places_pull" %}required{% endif %}>
+          <option value="">{% if job_type == "places_pull" %}Select market{% else %}All markets{% endif %}</option>
+          {% for market in job_market_options %}
+            <option value="{{ market.value }}" {% if market_filter.selected == market.value %}selected{% endif %}>{{ market.label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label>
+        <span>Niche</span>
+        <select name="niche" {% if job_type == "places_pull" %}required{% endif %}>
+          <option value="">{% if job_type == "places_pull" %}Select niche{% else %}All niches{% endif %}</option>
+          {% for niche in niche_options %}
+            <option value="{{ niche }}">{{ niche }}</option>
+          {% endfor %}
+        </select>
+      </label>
+
+      <label>
+        <span>Limit</span>
+        <input type="number" name="limit_count" min="1" max="1000" value="20">
+      </label>
+
+      <label class="check-row">
+        <input type="checkbox" name="dry_run" value="1" checked>
+        <span>Dry run</span>
+      </label>
+
+      {% if job.external %}
+        <label class="check-row">
+          <input type="checkbox" name="confirm_run" value="1">
+          <span>Confirm live external run</span>
+        </label>
+      {% endif %}
+
+      <button class="button primary" type="submit">Start {{ job.label }}</button>
+    </form>
+  {% endfor %}
+</section>
+
+<section class="table-panel">
+  <div class="panel-header">
+    <h2>Recent Jobs</h2>
+  </div>
+  <div class="table-wrap">
+    <table class="compact-table">
+      <thead>
+        <tr>
+          <th>Job</th>
+          <th>Status</th>
+          <th>Type</th>
+          <th>Market</th>
+          <th>Niche</th>
+          <th>Limit</th>
+          <th>Dry Run</th>
+          <th>Started</th>
+          <th>Finished</th>
+          <th>Log</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for job in jobs %}
+          <tr>
+            <td><code>{{ job.job_key }}</code></td>
+            <td><span class="pill">{{ job.status|pretty_label }}</span></td>
+            <td>{{ job.job_type|pretty_label }}</td>
+            <td>{{ job.market or "All" }}</td>
+            <td>{{ job.niche or "All" }}</td>
+            <td>{{ job.limit_count or "" }}</td>
+            <td>{{ "Yes" if job.dry_run else "No" }}</td>
+            <td>{{ job.started_at or "" }}</td>
+            <td>{{ job.finished_at or "" }}</td>
+            <td><a class="table-action" href="{{ url_for('job_detail', job_key=job.job_key) }}">Open</a></td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="10" class="empty">No dashboard jobs have been started yet.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

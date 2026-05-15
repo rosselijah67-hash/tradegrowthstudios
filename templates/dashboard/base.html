@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Local Lead Dashboard{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+</head>
+<body>
+  <header class="app-header">
+    <div>
+      <a class="brand" href="{{ url_for('overview') }}">Local Lead Dashboard</a>
+      <p class="subtitle">SQLite review console</p>
+    </div>
+    <nav class="nav-links" aria-label="Primary navigation">
+      <a href="{{ url_for('overview') }}" class="{% if active_page == 'overview' %}active{% endif %}">Overview</a>
+      <a href="{{ url_for('markets') }}" class="{% if active_page == 'markets' %}active{% endif %}">Markets</a>
+      <a href="{{ url_for('run_controls') }}" class="{% if active_page == 'run' %}active{% endif %}">Run</a>
+      <a href="{{ url_for('jobs') }}" class="{% if active_page == 'jobs' %}active{% endif %}">Jobs</a>
+      <a href="{{ url_for('leads') }}" class="{% if active_page == 'leads' %}active{% endif %}">Leads</a>
+      <a href="{{ url_for('review_queue') }}" class="{% if active_page == 'review' %}active{% endif %}">Review</a>
+      <a href="{{ url_for('crm') }}" class="{% if active_page == 'crm' %}active{% endif %}">CRM</a>
+      <a href="{{ url_for('outbound') }}" class="{% if active_page == 'outbound' %}active{% endif %}">Outbound</a>
+      <a href="{{ url_for('send_page') }}" class="{% if active_page == 'send' %}active{% endif %}">Send</a>
+      <a href="{{ url_for('health') }}">Health</a>
+      {% if dashboard_auth_enabled %}
+      <form class="nav-logout" method="post" action="{{ url_for('logout') }}">
+        <button class="button" type="submit">Logout{% if dashboard_user %} {{ dashboard_user }}{% endif %}</button>
+      </form>
+      {% endif %}
+    </nav>
+  </header>
+
+  <main class="page-shell">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
