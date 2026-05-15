@@ -1018,6 +1018,11 @@ def dashboard_password_matches(password: str) -> bool:
     return bool(plain_password) and secrets.compare_digest(password, plain_password)
 
 
+def dashboard_db_import_enabled() -> bool:
+    value = str(os.environ.get("DASHBOARD_DB_IMPORT_ENABLED") or "").strip().lower()
+    return value in {"1", "true", "yes", "y", "on"}
+
+
 def safe_next_path(value: Any) -> str:
     path = str(value or "").strip()
     if not path or not path.startswith("/") or path.startswith("//"):
@@ -1035,6 +1040,81 @@ def public_outreach_file_path(*parts: str) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
+def validate_uploaded_sqlite(path: Path) -> dict[str, Any]:
+    connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+    try:
+        required_tables = {"prospects", "website_audits", "artifacts"}
+        rows = connection.execute(
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+            """
+        ).fetchall()
+        tables = {str(row[0]) for row in rows}
+        missing = sorted(required_tables - tables)
+        if missing:
+            raise ValueError(f"Uploaded DB is missing required table(s): {', '.join(missing)}")
+        counts = {}
+        for table in ("prospects", "website_audits", "artifacts", "contacts", "outreach_queue"):
+            if table in tables:
+                counts[table] = int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+        if counts.get("prospects", 0) < 1:
+            raise ValueError("Uploaded DB has no prospects.")
+        return {"tables": sorted(tables), "counts": counts}
+    finally:
+        connection.close()
+
+
+def backup_sqlite_database(source: Path) -> Path | None:
+    if not source.is_file():
+        return None
+    backup_dir = project_path("backups")
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    target = backup_dir / f"{source.stem}-before-import-{stamp}.db"
+    source_connection = sqlite3.connect(source)
+    try:
+        target_connection = sqlite3.connect(target)
+        try:
+            source_connection.backup(target_connection)
+        finally:
+            target_connection.close()
+    finally:
+        source_connection.close()
+    return target
+
+
+def import_dashboard_database(uploaded_file: Any) -> dict[str, Any]:
+    filename = str(getattr(uploaded_file, "filename", "") or "")
+    if not filename.lower().endswith(".db"):
+        raise ValueError("Upload a .db SQLite file.")
+    db_path = resolve_project_path(current_app.config["DATABASE_PATH"])
+    if db_path is None:
+        raise ValueError("DATABASE_PATH is not configured.")
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = db_path.with_name(f".{db_path.name}.upload-{secrets.token_hex(8)}.tmp")
+    uploaded_file.save(tmp_path)
+    try:
+        validation = validate_uploaded_sqlite(tmp_path)
+        old_connection = g.pop("dashboard_db", None)
+        if old_connection is not None:
+            old_connection.close()
+        backup_path = backup_sqlite_database(db_path)
+        os.replace(tmp_path, db_path)
+        return {
+            "database_path": str(db_path),
+            "backup_path": str(backup_path) if backup_path else "",
+            "counts": validation["counts"],
+        }
+    except Exception:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
+
+
 def create_app(db_path: str | Path | None = None) -> Flask:
     app = Flask(
         __name__,
@@ -1047,6 +1127,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         or "local-dashboard-dev-secret"
     )
     app.config["DASHBOARD_AUTH_ENABLED"] = dashboard_auth_enabled()
+    app.config["DASHBOARD_DB_IMPORT_ENABLED"] = dashboard_db_import_enabled()
     app.config["DATABASE_PATH"] = str(resolve_project_path(db_path or get_database_path()))
     dashboard_jobs.ensure_schema(app.config["DATABASE_PATH"])
     ensure_outreach_queue_schema(app.config["DATABASE_PATH"])
@@ -1143,6 +1224,60 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         if resolved is None:
             abort(404)
         return send_file(resolved)
+
+    @app.get("/admin/database")
+    def database_admin() -> str:
+        return render_template(
+            "dashboard/database_admin.html",
+            active_page="database",
+            db_path=app.config["DATABASE_PATH"],
+            import_enabled=app.config["DASHBOARD_DB_IMPORT_ENABLED"],
+            result=None,
+            error="",
+        )
+
+    @app.post("/admin/database/import")
+    def database_import():
+        if not app.config["DASHBOARD_DB_IMPORT_ENABLED"]:
+            abort(403)
+        if request.form.get("confirm_import") != "1":
+            return render_template(
+                "dashboard/database_admin.html",
+                active_page="database",
+                db_path=app.config["DATABASE_PATH"],
+                import_enabled=True,
+                result=None,
+                error="Check the confirmation box before importing.",
+            )
+        uploaded_file = request.files.get("database_file")
+        if uploaded_file is None or not getattr(uploaded_file, "filename", ""):
+            return render_template(
+                "dashboard/database_admin.html",
+                active_page="database",
+                db_path=app.config["DATABASE_PATH"],
+                import_enabled=True,
+                result=None,
+                error="Choose a .db file first.",
+            )
+        try:
+            result = import_dashboard_database(uploaded_file)
+        except Exception as exc:
+            return render_template(
+                "dashboard/database_admin.html",
+                active_page="database",
+                db_path=app.config["DATABASE_PATH"],
+                import_enabled=True,
+                result=None,
+                error=str(exc),
+            )
+        return render_template(
+            "dashboard/database_admin.html",
+            active_page="database",
+            db_path=app.config["DATABASE_PATH"],
+            import_enabled=True,
+            result=result,
+            error="",
+        )
 
     @app.get("/")
     def overview() -> str:

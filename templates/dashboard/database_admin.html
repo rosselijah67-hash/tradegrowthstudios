@@ -1,0 +1,65 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Database Import - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <h1>Database Import</h1>
+    <p>Upload an existing SQLite CRM database into this deployment.</p>
+  </div>
+  <a class="button" href="{{ url_for('overview') }}">Dashboard</a>
+</section>
+
+{% if error %}
+<div class="notice error">{{ error }}</div>
+{% endif %}
+
+{% if result %}
+<div class="notice success">
+  Imported database successfully. Backup: {{ result.backup_path or "none" }}.
+</div>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-header">
+    <div>
+      <h2>Current Database</h2>
+      <p><code>{{ db_path }}</code></p>
+    </div>
+    <span class="pill {{ 'status-pass' if import_enabled else 'status-warn' }}">
+      {{ "Import Enabled" if import_enabled else "Import Disabled" }}
+    </span>
+  </div>
+
+  {% if result %}
+  <div class="send-status-grid">
+    {% for label, count in result.counts.items() %}
+    <div>
+      <span>{{ label|pretty_label }}</span>
+      <strong>{{ count }}</strong>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if import_enabled %}
+  <form class="send-form" method="post" action="{{ url_for('database_import') }}" enctype="multipart/form-data">
+    <label>
+      <span>SQLite database file</span>
+      <input type="file" name="database_file" accept=".db" required>
+    </label>
+    <label class="check-row">
+      <input type="checkbox" name="confirm_import" value="1" required>
+      <span>I understand this replaces the live CRM database after making a backup.</span>
+    </label>
+    <button class="button danger" type="submit">Import Database</button>
+  </form>
+  {% else %}
+  <p class="warning-text">
+    Database import is disabled. Set <code>DASHBOARD_DB_IMPORT_ENABLED=true</code> temporarily in Railway variables,
+    redeploy, import once, then set it back to false.
+  </p>
+  {% endif %}
+</section>
+{% endblock %}
