@@ -60,6 +60,8 @@ DASHBOARD_PASSWORD_HASH=<generated-password-hash>
 FLASK_SECRET_KEY=<generated-secret>
 LOG_LEVEL=INFO
 PUBLIC_PACKET_BASE_URL=https://crm.tradegrowthstudios.com
+DASHBOARD_DB_IMPORT_ENABLED=false
+DASHBOARD_MEDIA_IMPORT_ENABLED=false
 ```
 
 7. Add outbound/email variables:
@@ -112,6 +114,42 @@ curl -L "<temporary-private-download-url>" -o /app/storage/data/leads.db
 6. Delete the temporary uploaded DB link.
 
 Do not overwrite the Railway database after real users begin editing unless you are intentionally restoring a backup.
+
+## Uploading Screenshots And Generated Media
+
+The SQLite database stores paths like `screenshots/desktop/1.png`; the actual image files are separate. If the database is uploaded without these folders, the review queue will show missing desktop/mobile images.
+
+Use this only while importing media:
+
+1. In Railway variables, set:
+
+```text
+DASHBOARD_MEDIA_IMPORT_ENABLED=true
+```
+
+2. Let Railway redeploy.
+3. Open:
+
+```text
+https://<your-railway-domain>/admin/media
+```
+
+4. Upload each local zip from:
+
+```text
+data/media_uploads/
+```
+
+5. Refresh the review queue and confirm screenshots appear.
+6. In Railway variables, set:
+
+```text
+DASHBOARD_MEDIA_IMPORT_ENABLED=false
+```
+
+7. Let Railway redeploy again.
+
+Keep `DASHBOARD_DB_IMPORT_ENABLED=false` and `DASHBOARD_MEDIA_IMPORT_ENABLED=false` during normal use.
 
 ## Public Packet URLs
 

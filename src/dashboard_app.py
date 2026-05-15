@@ -16,6 +16,7 @@ import sqlite3
 import ssl
 import sys
 import threading
+import zipfile
 from datetime import datetime, timezone
 from email.message import EmailMessage
 from email.utils import formataddr
@@ -89,6 +90,7 @@ OUTREACH_INTERNAL_JARGON_PHRASES = (
     "conversion issue",
 )
 PUBLIC_PACKET_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,160}$")
+MEDIA_IMPORT_ROOTS = ("screenshots", "artifacts", "runs", "public_outreach")
 PUBLIC_AUTH_ENDPOINTS = {
     "login",
     "health",
@@ -1023,6 +1025,11 @@ def dashboard_db_import_enabled() -> bool:
     return value in {"1", "true", "yes", "y", "on"}
 
 
+def dashboard_media_import_enabled() -> bool:
+    value = str(os.environ.get("DASHBOARD_MEDIA_IMPORT_ENABLED") or "").strip().lower()
+    return value in {"1", "true", "yes", "y", "on"}
+
+
 def safe_next_path(value: Any) -> str:
     path = str(value or "").strip()
     if not path or not path.startswith("/") or path.startswith("//"):
@@ -1115,6 +1122,68 @@ def import_dashboard_database(uploaded_file: Any) -> dict[str, Any]:
         raise
 
 
+def import_media_archive(uploaded_file: Any) -> dict[str, Any]:
+    filename = str(getattr(uploaded_file, "filename", "") or "")
+    if not filename.lower().endswith(".zip"):
+        raise ValueError("Upload a .zip file.")
+
+    tmp_dir = project_path("runs/latest/import_uploads")
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    tmp_path = tmp_dir / f"media-{secrets.token_hex(8)}.zip"
+    uploaded_file.save(tmp_path)
+
+    extracted = 0
+    skipped_dirs = 0
+    bytes_written = 0
+    roots_seen: set[str] = set()
+    project_root = PROJECT_ROOT.resolve(strict=False)
+
+    try:
+        with zipfile.ZipFile(tmp_path) as archive:
+            for member in archive.infolist():
+                name = member.filename.replace("\\", "/").lstrip("/")
+                parts = [part for part in name.split("/") if part]
+                if not parts or name.endswith("/"):
+                    skipped_dirs += 1
+                    continue
+                if parts[0] not in MEDIA_IMPORT_ROOTS:
+                    raise ValueError(
+                        "Zip entries must start with one of: "
+                        + ", ".join(MEDIA_IMPORT_ROOTS)
+                    )
+                if any(part in {"..", "."} for part in parts):
+                    raise ValueError(f"Unsafe zip path: {member.filename}")
+
+                target = project_path(Path(*parts)).resolve(strict=False)
+                try:
+                    target.relative_to(project_root)
+                except ValueError as exc:
+                    raise ValueError(f"Unsafe zip path: {member.filename}") from exc
+
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source, target.open("wb") as destination:
+                    shutil.copyfileobj(source, destination)
+                extracted += 1
+                bytes_written += int(member.file_size or 0)
+                roots_seen.add(parts[0])
+    finally:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+
+    if extracted < 1:
+        raise ValueError("Zip did not contain any importable files.")
+
+    return {
+        "files": extracted,
+        "bytes": bytes_written,
+        "megabytes": round(bytes_written / 1024 / 1024, 2),
+        "roots": sorted(roots_seen),
+        "skipped_dirs": skipped_dirs,
+    }
+
+
 def create_app(db_path: str | Path | None = None) -> Flask:
     app = Flask(
         __name__,
@@ -1128,6 +1197,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     )
     app.config["DASHBOARD_AUTH_ENABLED"] = dashboard_auth_enabled()
     app.config["DASHBOARD_DB_IMPORT_ENABLED"] = dashboard_db_import_enabled()
+    app.config["DASHBOARD_MEDIA_IMPORT_ENABLED"] = dashboard_media_import_enabled()
     app.config["DATABASE_PATH"] = str(resolve_project_path(db_path or get_database_path()))
     dashboard_jobs.ensure_schema(app.config["DATABASE_PATH"])
     ensure_outreach_queue_schema(app.config["DATABASE_PATH"])
@@ -1274,6 +1344,55 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             "dashboard/database_admin.html",
             active_page="database",
             db_path=app.config["DATABASE_PATH"],
+            import_enabled=True,
+            result=result,
+            error="",
+        )
+
+    @app.get("/admin/media")
+    def media_admin() -> str:
+        return render_template(
+            "dashboard/media_admin.html",
+            active_page="media",
+            import_enabled=app.config["DASHBOARD_MEDIA_IMPORT_ENABLED"],
+            result=None,
+            error="",
+        )
+
+    @app.post("/admin/media/import")
+    def media_import():
+        if not app.config["DASHBOARD_MEDIA_IMPORT_ENABLED"]:
+            abort(403)
+        if request.form.get("confirm_import") != "1":
+            return render_template(
+                "dashboard/media_admin.html",
+                active_page="media",
+                import_enabled=True,
+                result=None,
+                error="Check the confirmation box before importing.",
+            )
+        uploaded_file = request.files.get("media_file")
+        if uploaded_file is None or not getattr(uploaded_file, "filename", ""):
+            return render_template(
+                "dashboard/media_admin.html",
+                active_page="media",
+                import_enabled=True,
+                result=None,
+                error="Choose a .zip file first.",
+            )
+        try:
+            result = import_media_archive(uploaded_file)
+        except Exception as exc:
+            return render_template(
+                "dashboard/media_admin.html",
+                active_page="media",
+                import_enabled=True,
+                result=None,
+                error=str(exc),
+            )
+        return render_template(
+            "dashboard/media_admin.html",
+            active_page="media",
             import_enabled=True,
             result=result,
             error="",

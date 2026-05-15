@@ -1,0 +1,54 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Media Import - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <h1>Media Import</h1>
+    <p>Upload screenshot and artifact folders that the SQLite database references.</p>
+  </div>
+  <a class="button" href="{{ url_for('review_queue') }}">Review Queue</a>
+</section>
+
+{% if error %}
+<div class="notice error">{{ error }}</div>
+{% endif %}
+
+{% if result %}
+<div class="notice success">
+  Imported {{ result.files }} file(s), {{ result.megabytes }} MB, under {{ result.roots|join(", ") }}.
+</div>
+{% endif %}
+
+<section class="panel">
+  <div class="panel-header">
+    <div>
+      <h2>Upload Media Zip</h2>
+      <p>The zip must contain folders such as <code>screenshots/desktop</code> or <code>screenshots/mobile</code>.</p>
+    </div>
+    <span class="pill {{ 'status-pass' if import_enabled else 'status-warn' }}">
+      {{ "Import Enabled" if import_enabled else "Import Disabled" }}
+    </span>
+  </div>
+
+  {% if import_enabled %}
+  <form class="send-form" method="post" action="{{ url_for('media_import') }}" enctype="multipart/form-data">
+    <label>
+      <span>Media zip file</span>
+      <input type="file" name="media_file" accept=".zip" required>
+    </label>
+    <label class="check-row">
+      <input type="checkbox" name="confirm_import" value="1" required>
+      <span>I understand this extracts files into the live CRM media folders.</span>
+    </label>
+    <button class="button danger" type="submit">Import Media</button>
+  </form>
+  {% else %}
+  <p class="warning-text">
+    Media import is disabled. Set <code>DASHBOARD_MEDIA_IMPORT_ENABLED=true</code> temporarily in Railway variables,
+    redeploy, import once, then set it back to false.
+  </p>
+  {% endif %}
+</section>
+{% endblock %}
