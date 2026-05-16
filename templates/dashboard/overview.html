@@ -57,7 +57,7 @@
         <span class="pill">{{ group.total }}</span>
       </summary>
       <div class="overview-metric-card-grid">
-        {% for item in group.items %}
+        {% for item in group["items"] %}
           <a class="overview-metric-card" href="{{ item.href }}">
             <span>{{ item.label }}</span>
             <strong>{{ item.count }}</strong>
