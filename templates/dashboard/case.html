@@ -14,6 +14,9 @@
 {% if review_message %}
 <div class="notice success">{{ review_message }}</div>
 {% endif %}
+{% if quote_message %}
+<div class="notice {{ quote_message.status }}">{{ quote_message.message }}</div>
+{% endif %}
 
 <section class="case-header">
   <div>
@@ -27,6 +30,7 @@
     </div>
   </div>
   <div class="case-header-actions">
+    <a class="button primary quote-create-button" href="{{ url_for('new_quote', prospect_id=prospect.id) }}">Create Quote</a>
     {% if prospect.pipeline_stage in ["CONTACT_MADE", "CALL_BOOKED", "PROPOSAL_SENT", "CLOSED_WON"] %}
     <a class="button primary" href="{{ url_for('sales_packet', prospect_id=prospect.id) }}">Sales Packet</a>
     {% endif %}
@@ -35,6 +39,69 @@
     {% endif %}
   </div>
 </section>
+
+{% if latest_quote %}
+<section class="panel quote-summary-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Latest Quote</h2>
+      <p>{{ latest_quote.package_name or "Custom quote" }}{% if quotes|length > 1 %} / {{ quotes|length }} quotes{% endif %}</p>
+    </div>
+    <span class="pill">{{ latest_quote.status|pretty_label }}</span>
+  </div>
+  <div class="quote-summary-grid">
+    <div>
+      <span>Status</span>
+      <strong>{{ latest_quote.status|pretty_label }}</strong>
+    </div>
+    <div>
+      <span>Package</span>
+      <strong>{{ latest_quote.package_name or "Custom" }}</strong>
+    </div>
+    <div>
+      <span>One-time total</span>
+      <strong>{{ latest_quote.one_time_total_cents|money }}</strong>
+    </div>
+    <div>
+      <span>Monthly recurring</span>
+      <strong>{{ latest_quote.recurring_monthly_total_cents|money }}/mo</strong>
+    </div>
+    <div>
+      <span>Valid until</span>
+      <strong>{{ latest_quote.valid_until or "Not set" }}</strong>
+    </div>
+    <div>
+      <span>Updated</span>
+      <strong>{{ latest_quote.updated_at or "" }}</strong>
+    </div>
+  </div>
+  <div class="quote-link-row">
+    <a class="button" href="{{ url_for('quote_detail', quote_id=latest_quote.id) }}">View</a>
+    <a class="button" href="{{ url_for('edit_quote', quote_id=latest_quote.id) }}">Edit</a>
+    <a class="button" href="{{ url_for('quote_export_text', quote_id=latest_quote.id) }}">Export</a>
+    <a class="button" href="{{ url_for('quote_export_html', quote_id=latest_quote.id) }}">Printable Quote</a>
+    <form method="post" action="{{ url_for('create_quote_revision', quote_id=latest_quote.id) }}">
+      <button class="button" type="submit">Create Revision</button>
+    </form>
+    <form method="post" action="{{ url_for('delete_quote', quote_id=latest_quote.id) }}" onsubmit="return confirm('Delete this quote and its saved line items? This cannot be undone.');">
+      <input type="hidden" name="confirm_delete" value="1">
+      <input type="hidden" name="return_to" value="case">
+      <button class="button danger" type="submit">Delete Quote</button>
+    </form>
+    <a class="button primary" href="{{ url_for('new_quote', prospect_id=prospect.id) }}">New Quote</a>
+  </div>
+</section>
+{% elif quotes is defined %}
+<section class="panel quote-summary-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Quotes</h2>
+      <p>No quotes attached yet.</p>
+    </div>
+    <a class="button primary" href="{{ url_for('new_quote', prospect_id=prospect.id) }}">Create Quote</a>
+  </div>
+</section>
+{% endif %}
 
 {% if franchise_exclusion and franchise_exclusion.is_excluded %}
 <section class="panel exclusion-panel">

@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from . import db
+from . import actor_context, db
 from .cli_utils import build_parser, finish_command, setup_command
 from .config import project_path
 
@@ -149,6 +149,7 @@ def _select_candidates(
     if niche:
         clauses.append("niche = ?")
         params.append(niche)
+    actor_context.append_actor_scope(clauses, params, "prospects")
 
     sql = f"""
         SELECT *
@@ -163,7 +164,13 @@ def _select_candidates(
 
 
 def _select_candidate_by_id(connection: Any, prospect_id: int) -> list[dict[str, Any]]:
-    row = connection.execute("SELECT * FROM prospects WHERE id = ?", (prospect_id,)).fetchone()
+    clauses = ["id = ?"]
+    params: list[Any] = [prospect_id]
+    actor_context.append_actor_scope(clauses, params, "prospects")
+    row = connection.execute(
+        f"SELECT * FROM prospects WHERE {' AND '.join(clauses)}",
+        params,
+    ).fetchone()
     return [db.row_to_dict(row)] if row else []
 
 
@@ -514,6 +521,10 @@ def main() -> int:
     parser = build_arg_parser()
     args = parser.parse_args()
     context = setup_command(args, COMMAND)
+    try:
+        actor_context.validate_actor_market_access(args.market, allow_global_scope=True)
+    except actor_context.ActorAccessError as exc:
+        raise SystemExit(str(exc)) from exc
 
     connection = db.init_db(args.db_path)
     if args.prospect_id is not None:

@@ -1,0 +1,234 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}{{ quote.title or "Quote" }} - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <a class="back-link" href="{{ url_for('case_file', prospect_id=quote.prospect_id) }}">Back to case</a>
+    <h1>{{ quote.title or "Quote" }}</h1>
+    <p>{{ quote.quote_key }} / version {{ quote.version or 1 }}</p>
+  </div>
+  <div class="quote-link-row">
+    <a class="button primary" href="{{ url_for('edit_quote', quote_id=quote.id) }}">Edit Quote</a>
+    <a class="button" href="{{ url_for('quote_export_text', quote_id=quote.id) }}">Copy Email Text</a>
+    <a class="button" href="{{ url_for('quote_export_html', quote_id=quote.id) }}">Printable Quote</a>
+  </div>
+</section>
+
+{% if message %}
+<div class="notice {{ message.status }}">{{ message.message }}</div>
+{% endif %}
+
+{% set assumption_items = quote.assumptions.get('items', []) if quote.assumptions else [] %}
+
+<section class="quote-detail-grid">
+  <div class="panel">
+    <div class="panel-header">
+      <div>
+        <h2>Prospect</h2>
+        <p>{{ quote.client_business_name or (prospect.business_name if prospect else "") }}</p>
+      </div>
+      <span class="pill">{{ quote.status|pretty_label }}</span>
+    </div>
+    <dl class="detail-list">
+      <div>
+        <dt>Contact</dt>
+        <dd>{{ quote.client_contact_name or "" }}</dd>
+      </div>
+      <div>
+        <dt>Email</dt>
+        <dd>{{ quote.client_email or "" }}</dd>
+      </div>
+      <div>
+        <dt>Phone</dt>
+        <dd>{{ quote.client_phone or "" }}</dd>
+      </div>
+      <div>
+        <dt>Website</dt>
+        <dd>{{ quote.website_url or "" }}</dd>
+      </div>
+      <div>
+        <dt>Package</dt>
+        <dd>{{ quote.package_name or "Custom" }}</dd>
+      </div>
+      <div>
+        <dt>Valid Until</dt>
+        <dd>{{ quote.valid_until or "" }}</dd>
+      </div>
+    </dl>
+  </div>
+
+  <div class="panel quote-total-panel">
+    <div class="panel-header">
+      <h2>Totals</h2>
+    </div>
+    <dl class="detail-list score-list">
+      <div>
+        <dt>One-time subtotal</dt>
+        <dd>{{ quote.one_time_subtotal_cents|money }}</dd>
+      </div>
+      <div>
+        <dt>Discount</dt>
+        <dd>{{ quote.one_time_discount_cents|money }}</dd>
+      </div>
+      <div>
+        <dt>One-time total</dt>
+        <dd>{{ quote.one_time_total_cents|money }}</dd>
+      </div>
+      <div>
+        <dt>Monthly recurring</dt>
+        <dd>{{ quote.recurring_monthly_total_cents|money }}/mo</dd>
+      </div>
+      <div>
+        <dt>Deposit due</dt>
+        <dd>{{ quote.deposit_due_cents|money }} ({{ quote.deposit_percent or 0 }}%)</dd>
+      </div>
+      <div>
+        <dt>Balance due</dt>
+        <dd>{{ quote.balance_due_cents|money }}</dd>
+      </div>
+      <div>
+        <dt>Recurring term</dt>
+        <dd>{{ quote.term_months or 0 }} months</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section class="panel quote-line-panel">
+  <div class="panel-header">
+    <h2>Line Items</h2>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Item</th>
+          <th>Qty</th>
+          <th>Unit</th>
+          <th>Unit Price</th>
+          <th>Total</th>
+          <th>Salesman Notes</th>
+          <th>Flags</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in quote.line_items %}
+        <tr>
+          <td>{{ item.item_type|pretty_label }}</td>
+          <td>
+            <strong>{{ item.name }}</strong>
+            {% if item.description %}<br><span class="muted">{{ item.description }}</span>{% endif %}
+          </td>
+          <td>{{ item.quantity }}</td>
+          <td>{{ item.metadata.unit_label or "each" }}</td>
+          <td>{{ item.unit_price_cents|money }}{% if item.recurring_interval == "monthly" %}/mo{% endif %}</td>
+          <td>{{ item.line_total_cents|money }}{% if item.recurring_interval == "monthly" %}/mo{% endif %}</td>
+          <td>{{ item.metadata.salesman_notes or "" }}</td>
+          <td>
+            {% if item.is_optional %}<span class="pill">Optional</span>{% endif %}
+            {% if item.is_included %}<span class="pill">Included</span>{% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="8" class="empty">No line items saved.</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="quote-detail-grid">
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Client Notes</h2>
+    </div>
+    <p>{{ quote.client_visible_notes or "No client-facing notes." }}</p>
+    {% if assumption_items %}
+    <h3>Assumptions</h3>
+    <ul>
+      {% for item in assumption_items %}
+      <li>{{ item }}</li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Internal Notes</h2>
+    </div>
+    <p>{{ quote.internal_notes or "No internal notes." }}</p>
+    {% if quote.metadata.pricing_warnings %}
+    <div class="copy-warning-list">
+      {% for warning in quote.metadata.pricing_warnings %}
+      <span class="warning-chip">{{ warning }}</span>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel quote-actions-panel">
+  <div class="panel-header">
+    <h2>Actions</h2>
+  </div>
+  <div class="quote-action-forms">
+    <form method="post" action="{{ url_for('mark_quote_sent', quote_id=quote.id) }}">
+      <button class="button" type="submit">Mark Sent</button>
+    </form>
+    <form method="post" action="{{ url_for('mark_quote_accepted', quote_id=quote.id) }}">
+      <button class="button primary" type="submit">Mark Accepted</button>
+    </form>
+    <form method="post" action="{{ url_for('mark_quote_declined', quote_id=quote.id) }}">
+      <label class="quote-confirm-row">
+        <input type="checkbox" name="confirm_close_lost" value="1">
+        <span>Also close CRM as lost</span>
+      </label>
+      <button class="button danger" type="submit">Mark Declined</button>
+    </form>
+    <form method="post" action="{{ url_for('create_quote_revision', quote_id=quote.id) }}">
+      <button class="button" type="submit">Create Revision</button>
+    </form>
+    <form method="post" action="{{ url_for('delete_quote', quote_id=quote.id) }}" onsubmit="return confirm('Delete this quote and its saved line items? This cannot be undone.');">
+      <input type="hidden" name="confirm_delete" value="1">
+      <input type="hidden" name="return_to" value="case">
+      <button class="button danger" type="submit">Delete Quote</button>
+    </form>
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>Quote Events</h2>
+  </div>
+  <div class="timeline-list">
+    {% for event in quote.events %}
+    <article class="timeline-item">
+      <div>
+        <strong>{{ event.event_type|pretty_label }}</strong>
+        <p>{{ event.created_at or "" }}</p>
+      </div>
+      <dl class="detail-list">
+        <div>
+          <dt>Status</dt>
+          <dd>{{ event.status or "" }}</dd>
+        </div>
+        {% if event.note %}
+        <div>
+          <dt>Note</dt>
+          <dd>{{ event.note }}</dd>
+        </div>
+        {% endif %}
+      </dl>
+    </article>
+    {% else %}
+    <p class="empty">No quote events logged yet.</p>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

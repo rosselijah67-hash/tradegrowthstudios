@@ -1,0 +1,389 @@
+# CRM quote pricing catalog. Money is stored in cents.
+# Floor prices are internal guardrails and should not appear in client exports.
+
+base_packages:
+  site_refresh:
+    name: "Site Refresh"
+    display_price: "$3,000"
+    default_price_cents: 300000
+    floor_price_cents: 200000
+    quote_range: "$2,000-$3,000"
+    description: "A practical website refresh using usable existing content. We clean up the layout, mobile call/request path, core page structure, basic SEO setup, forms/contact path, and launch details."
+    best_for: "A contractor with usable copy/photos but a dated site or weak call/request path."
+    included:
+      - reuse existing copy and content where appropriate
+      - redesigned homepage and core pages within agreed scope
+      - mobile-first header, phone, and request-path improvements
+      - basic metadata, page titles, and SEO structure cleanup
+      - contact form or request path improvement
+      - launch support and post-launch check
+    exclusions:
+      - custom quote calculators
+      - large content rewrite unless listed
+      - paid stock media unless added
+      - extensive service-area page buildout
+      - paid ad management
+
+  growth_rebuild:
+    name: "Growth Rebuild"
+    display_price: "$3,500-$5,000"
+    default_price_cents: 450000
+    floor_price_cents: 350000
+    ceiling_price_cents: 500000
+    description: "A fuller rebuild for a local service company: cleaner page structure, improved service copy, stronger trust and CTA sections, practical design polish, SEO-ready structure, and a tracking-ready launch."
+    best_for: "A trade company with visible website problems and enough services or proof points to justify a fuller rebuild."
+    included:
+      - everything in Site Refresh
+      - 5-8 total pages
+      - improved service-page structure
+      - stronger hero, trust, and CTA sections
+      - content cleanup and rewriting
+      - practical visual polish where useful
+      - GA4/GTM-ready structure; ad management is not included unless listed
+    exclusions:
+      - stock photo or video licensing unless added
+      - major custom applications or calculators
+      - multi-location architecture beyond agreed scope
+
+  conversion_system:
+    name: "Conversion System"
+    display_price: "$5,000-$10,000"
+    default_price_cents: 750000
+    floor_price_cents: 500000
+    ceiling_price_cents: 1000000
+    description: "A larger lead-capture rebuild with service pages, service-area structure, custom request flow, tracking setup, stronger UX, and more design/customization time."
+    best_for: "A higher-ticket contractor that needs the site to make calls and quote requests easier to understand, track, and act on."
+    included:
+      - everything in Growth Rebuild
+      - 8-12 total pages
+      - service-specific page architecture
+      - service-area structure
+      - custom request/quote flow
+      - GA4/GTM/Search Console setup
+      - schema foundation
+      - stronger conversion, proof, and trust sections
+    exclusions:
+      - full custom software
+      - complex integrations
+      - paid ad strategy or management
+      - custom dashboards unless added
+
+  engineered_build:
+    name: "Engineered Build"
+    display_price: "$10,000+"
+    default_price_cents: 1000000
+    floor_price_cents: 1000000
+    requires_custom_quote: true
+    requires_discovery: true
+    description: "A custom-coded site or web system that needs discovery before a firm scope. This can include quote calculators, custom dashboards, advanced animations, multi-location systems, workflows, CRM/API integrations, and specialized UX."
+    best_for: "Companies that need more than a standard website: custom tools, buying flows, dashboards, or operational systems."
+    included:
+      - discovery
+      - custom technical scope
+      - custom-coded components
+      - advanced UX or animation where justified
+      - integration planning
+    exclusions:
+      - fixed scope without discovery
+      - third-party software costs
+      - paid ad management unless separately quoted
+
+recurring_retainers:
+  hosting_monitoring:
+    name: "Hosting + Monitoring"
+    display_price: "$149/mo"
+    default_price_cents: 14900
+    recurring_interval: monthly
+    description: "Managed hosting support with uptime checks, backups, software health checks, light maintenance, and basic issue monitoring."
+    client_visible: true
+    requires_discovery: false
+    notes: "Baseline monthly support."
+
+  managed_web_ops:
+    name: "Managed Web Ops"
+    display_price: "$399/mo"
+    default_price_cents: 39900
+    recurring_interval: monthly
+    description: "Ongoing web operations after launch: updates, small content changes, tracking checks, form checks, and upkeep of the call/request path."
+    client_visible: true
+    requires_discovery: false
+    notes: "Best default retainer after a rebuild."
+
+  growth_ops:
+    name: "Growth Ops"
+    display_price: "$900+/mo"
+    default_price_cents: 90000
+    min_price_cents: 90000
+    recurring_interval: monthly
+    description: "Monthly support for service-page growth, content planning, conversion-path improvements, reporting, and listed campaign landing-page support."
+    client_visible: true
+    requires_discovery: true
+    notes: "Monthly scope should be confirmed before quote acceptance."
+
+addons:
+  extra_standard_page:
+    name: "Extra Standard Page"
+    description: "Additional standard page built from the approved site design, such as About, Financing, Careers, or FAQ."
+    category: pages
+    default_price_cents: 35000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: ""
+
+  extra_service_page:
+    name: "Extra Service Page"
+    description: "Additional service page with clear service explanation, proof points, call/request path, and SEO-ready structure."
+    category: pages
+    default_price_cents: 45000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: ""
+
+  service_page_4_pack:
+    name: "Service Page 4-Pack"
+    description: "Four additional service pages planned together so services are easier to browse, compare, and request."
+    category: pages
+    default_price_cents: 140000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: "Efficient when the service list is already clear."
+
+  service_area_5_pack:
+    name: "Service Area 5-Pack"
+    description: "Five service-area pages for agreed cities or suburbs, using accurate service-area details supplied or approved by the client."
+    category: local_seo
+    default_price_cents: 125000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: "Assumes agreed service-area strategy."
+
+  blog_page_4_posts:
+    name: "Blog Page + 4 Posts"
+    description: "Blog or resources page setup plus four useful starter posts tied to agreed services or customer questions."
+    category: content
+    default_price_cents: 75000
+    min_price_cents: 50000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: "Best when the client can supply source notes, photos, or examples."
+
+  seo_content_10_pack:
+    name: "SEO Content 10-Pack"
+    description: "Ten structured content pages or posts around agreed service topics. Improves content depth and site structure but does not guarantee rankings."
+    category: content
+    default_price_cents: 200000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: ""
+
+  seo_content_20_pack:
+    name: "SEO Content 20-Pack"
+    description: "Twenty structured content pages or posts for a larger service-content buildout. Improves content depth and site structure but does not guarantee rankings."
+    category: content
+    default_price_cents: 350000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: ""
+
+  ga4_gtm_search_console:
+    name: "GA4, GTM, and Search Console Setup"
+    description: "Set up Google Analytics, Google Tag Manager, and Search Console so basic site activity and lead paths can be measured."
+    category: tracking
+    default_price_cents: 60000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: "Does not include paid ad management."
+
+  ads_conversion_tracking_readiness:
+    name: "Ads Conversion Tracking Readiness"
+    description: "Prepare conversion events and thank-you paths so paid campaigns can measure form fills, calls, or other agreed lead actions."
+    category: tracking
+    default_price_cents: 75000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: "Implementation may depend on ad account access."
+
+  custom_quote_form:
+    name: "Custom Quote Form"
+    description: "Custom request form with fields and routing logic tailored to the service and the questions needed before a call-back."
+    category: conversion
+    default_price_cents: 125000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: ""
+
+  calendar_integration:
+    name: "Calendar Integration"
+    description: "Connect the request or booking path to an approved scheduling tool supplied by the client."
+    category: conversion
+    default_price_cents: 40000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: "Third-party subscription costs are separate."
+
+  call_tracking_setup:
+    name: "Call Tracking Setup"
+    description: "Place call-tracking numbers in the right site locations and keep phone calls easy to make from mobile."
+    category: tracking
+    default_price_cents: 30000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: "Call tracking provider costs are separate."
+
+  before_after_gallery:
+    name: "Before/After Gallery"
+    description: "Project gallery module for before/after photos, completed work, or job examples supplied or approved by the client."
+    category: trust
+    default_price_cents: 50000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: "Assumes client can provide usable photos."
+
+  photo_video_sourcing:
+    name: "Photo/Video Sourcing"
+    description: "Find and prepare suitable visual assets for site sections where the client does not have enough usable media."
+    category: media
+    default_price_cents: 50000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: "Licensing fees are separate unless included."
+
+  licensed_stock_pack:
+    name: "Licensed Stock Pack"
+    description: "Starter pack of licensed stock images for site sections that need stronger visuals when original photos are unavailable."
+    category: media
+    default_price_cents: 35000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: "Use only when original media is unavailable."
+
+  copywriting_refresh:
+    name: "Copywriting Refresh"
+    description: "Rewrite core website copy so services, service areas, trust points, and next steps are clearer to real customers."
+    category: content
+    default_price_cents: 125000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: ""
+
+  schema_foundation:
+    name: "Schema Foundation"
+    description: "Basic local business and service schema markup to help search engines read the site structure. Does not guarantee rankings or rich results."
+    category: seo
+    default_price_cents: 40000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: ""
+
+  redirect_migration_map:
+    name: "Redirect Migration Map"
+    description: "Map important old URLs to the new site URLs before launch to reduce avoidable broken links."
+    category: migration
+    default_price_cents: 50000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: "Recommended for sites with meaningful existing traffic or many indexed pages."
+
+  ads_landing_page:
+    name: "Ads Landing Page"
+    description: "Focused landing page for one service, offer, or campaign, with a clear call/request path."
+    category: conversion
+    default_price_cents: 100000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: "Paid media strategy and management are separate."
+
+  emergency_service_module:
+    name: "Emergency Service Module"
+    description: "Prominent emergency-service path with phone, availability language, trust points, and request prompts approved by the client."
+    category: conversion
+    default_price_cents: 50000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: ""
+
+  financing_warranty_trust_module:
+    name: "Financing/Warranty Trust Module"
+    description: "Trust section for financing, warranties, guarantees, or service assurances, using only claims the client verifies."
+    category: trust
+    default_price_cents: 35000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: false
+    notes: "Client must verify all claims before launch."
+
+  custom_calculator:
+    name: "Custom Calculator"
+    description: "Interactive calculator or estimator for a specific service or buying path, scoped after the formula, inputs, and disclaimers are confirmed."
+    category: custom_systems
+    default_price_cents: 350000
+    min_price_cents: 350000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: true
+    notes: "Scope varies by formula, UX, and data requirements."
+
+  client_dashboard_or_internal_tool:
+    name: "Client Dashboard or Internal Tool"
+    description: "Custom dashboard or internal workflow tool connected to the web experience, scoped around the actual operational process."
+    category: custom_systems
+    default_price_cents: 500000
+    min_price_cents: 500000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: true
+    notes: "Requires discovery and technical spec."
+
+  multi_location_architecture:
+    name: "Multi-Location Architecture"
+    description: "Page and navigation architecture for multiple locations, branches, or service-area groups."
+    category: local_seo
+    default_price_cents: 250000
+    min_price_cents: 250000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: true
+    notes: "Final scope depends on number of locations and content needs."
+
+  crm_integration_workflow:
+    name: "CRM Integration Workflow"
+    description: "Workflow planning and implementation for routing website leads into a CRM or operations system."
+    category: integrations
+    default_price_cents: 350000
+    min_price_cents: 350000
+    recurring_interval: null
+    client_visible: true
+    requires_discovery: true
+    notes: "Third-party software costs and API limits are separate."
+
+positioning:
+  allowed_language:
+    - website replacement
+    - audit-backed redesign
+    - mobile-first call/request path
+    - conversion infrastructure
+    - service-page and service-area architecture
+    - tracking-ready managed web operations
+    - custom systems for engineered builds
+  banned_language:
+    - AI websites

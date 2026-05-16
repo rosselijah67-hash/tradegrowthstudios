@@ -7,7 +7,7 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from . import db
+from . import actor_context, db, territories
 from .cli_utils import build_parser, finish_command, setup_command
 from .config import load_yaml_config
 from .franchise_filter import check_franchise_exclusion
@@ -257,6 +257,8 @@ def _normalize_place(
     niche_key: str,
     city: str,
     state: str | None,
+    market_state: str | None,
+    owner_username: str | None,
     search_term: str,
     query: str,
     min_reviews: int,
@@ -310,6 +312,8 @@ def _normalize_place(
         "state": state_guess or state,
         "city_guess": city_guess or city,
         "state_guess": state_guess or state,
+        "market_state": market_state,
+        "owner_username": owner_username,
         "phone": phone,
         "website_url": website_url,
         "domain": domain,
@@ -454,13 +458,19 @@ def main() -> int:
     args = parser.parse_args()
     context = setup_command(args, COMMAND)
 
+    try:
+        actor_market_state = actor_context.validate_actor_market_access(args.market)
+    except actor_context.ActorAccessError as exc:
+        raise SystemExit(str(exc)) from exc
+
     api_key = _clean(os.environ.get("GOOGLE_MAPS_API_KEY"))
     if not api_key:
         raise SystemExit("GOOGLE_MAPS_API_KEY is required in .env for places_pull")
 
     market_config, niche_config = _load_market_and_niche(args.market, args.niche)
     cities = _included_cities(market_config)
-    state = _state_for_market(market_config)
+    state = actor_market_state or territories.normalize_state(_state_for_market(market_config))
+    owner_username = actor_context.owner_username_for_state(state)
     country = _clean(market_config.get("country")) or "US"
     search_terms = [_clean(term) for term in niche_config.get("search_terms", [])]
     search_terms = [term for term in search_terms if term]
@@ -514,6 +524,8 @@ def main() -> int:
                         niche_key=args.niche,
                         city=city,
                         state=state,
+                        market_state=state,
+                        owner_username=owner_username,
                         search_term=search_term,
                         query=query,
                         min_reviews=min_reviews,
@@ -538,6 +550,20 @@ def main() -> int:
 
                     _remember(prospect, seen_tokens)
                     existing = _find_existing_prospect(connection, prospect)
+                    if existing and not actor_context.actor_can_access_prospect(existing):
+                        summary.duplicates_skipped += 1
+                        context.logger.warning(
+                            "unauthorized_existing_duplicate_skipped",
+                            extra={
+                                "event": "unauthorized_existing_duplicate_skipped",
+                                "place_id": prospect.get("place_id"),
+                                "business_name": prospect.get("business_name"),
+                                "domain": prospect.get("domain"),
+                                "phone": prospect.get("phone"),
+                                "existing_prospect_id": existing.get("id"),
+                            },
+                        )
+                        continue
 
                     if args.dry_run:
                         _log_dry_run(context, prospect, existing)

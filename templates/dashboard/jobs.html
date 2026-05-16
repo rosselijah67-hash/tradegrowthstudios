@@ -16,6 +16,7 @@
 
 <section class="pipeline-grid" aria-label="Dashboard job controls">
   {% for job_type, job in job_types.items() %}
+    {% set market_required = job_type == "places_pull" or dashboard_current_user.role != "admin" %}
     <form class="panel pipeline-job-card" method="post" action="{{ url_for('start_dashboard_job') }}">
       <input type="hidden" name="job_type" value="{{ job_type }}">
       <div class="panel-header">
@@ -41,8 +42,8 @@
 
       <label>
         <span>Market</span>
-        <select name="market" {% if job_type == "places_pull" %}required{% endif %}>
-          <option value="">{% if job_type == "places_pull" %}Select market{% else %}All markets{% endif %}</option>
+        <select name="market" {% if market_required %}required{% endif %}>
+          <option value="">{% if market_required %}Select market{% else %}All markets{% endif %}</option>
           {% for market in job_market_options %}
             <option value="{{ market.value }}" {% if market_filter.selected == market.value %}selected{% endif %}>{{ market.label }}</option>
           {% endfor %}

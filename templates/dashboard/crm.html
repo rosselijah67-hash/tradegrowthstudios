@@ -39,6 +39,14 @@
             <strong>{{ prospect.business_name }}</strong>
             <span>{{ prospect.market or "No market" }}{% if prospect.niche %} / {{ prospect.niche }}{% endif %}</span>
             <small>{{ prospect.next_action or "No next action" }}</small>
+            {% if prospect.quote_count %}
+            <span class="crm-quote-indicator">
+              <b>{{ prospect.latest_quote_status|pretty_label }}</b>
+              {{ prospect.latest_quote_amount_cents|money }}
+              {% if prospect.latest_quote_monthly_cents %}+ {{ prospect.latest_quote_monthly_cents|money }}/mo{% endif %}
+              <small>{{ prospect.quote_count }} quote{{ "" if prospect.quote_count == 1 else "s" }}</small>
+            </span>
+            {% endif %}
           </a>
         {% else %}
           <p class="empty">No prospects in this folder.</p>

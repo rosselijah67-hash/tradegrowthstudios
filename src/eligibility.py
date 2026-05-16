@@ -6,7 +6,7 @@ import csv
 import json
 from typing import Any
 
-from . import db
+from . import actor_context, db
 from .cli_utils import build_parser, finish_command, setup_command
 from .config import load_yaml_config, project_path
 from .franchise_filter import check_franchise_exclusion
@@ -276,6 +276,7 @@ def _select_prospects(
     if niche:
         clauses.append("niche = ?")
         params.append(niche)
+    actor_context.append_actor_scope(clauses, params, "prospects")
 
     sql = f"SELECT * FROM prospects WHERE {' AND '.join(clauses)} ORDER BY id"
     if limit is not None:
@@ -416,6 +417,10 @@ def main() -> int:
     parser = build_parser("Calculate Phase 1 pre-audit prospect eligibility.")
     args = parser.parse_args()
     context = setup_command(args, COMMAND)
+    try:
+        actor_context.validate_actor_market_access(args.market, allow_global_scope=True)
+    except actor_context.ActorAccessError as exc:
+        raise SystemExit(str(exc)) from exc
 
     scoring_config = load_yaml_config("scoring.yaml")
     markets_config = load_yaml_config("markets.yaml")

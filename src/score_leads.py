@@ -7,7 +7,7 @@ import json
 import re
 from typing import Any
 
-from . import db
+from . import actor_context, db
 from .cli_utils import build_parser, finish_command, setup_command
 from .config import load_yaml_config, project_path
 from .pagespeed import PAGESPEED_SUCCESS_STATUSES
@@ -96,6 +96,7 @@ def _select_audited_prospects(
     clauses.append(f"(next_action IS NULL OR next_action NOT IN ({blocked_next_actions}))")
     params.extend(PROTECTED_SCORING_STATUSES)
     params.extend(PROTECTED_SCORING_NEXT_ACTIONS)
+    actor_context.append_actor_scope(clauses, params, "prospects")
 
     sql = f"SELECT * FROM prospects WHERE {' AND '.join(clauses)} ORDER BY id"
     if limit is not None:
@@ -749,6 +750,10 @@ def main() -> int:
     )
     args = parser.parse_args()
     context = setup_command(args, COMMAND)
+    try:
+        actor_context.validate_actor_market_access(args.market, allow_global_scope=True)
+    except actor_context.ActorAccessError as exc:
+        raise SystemExit(str(exc)) from exc
 
     scoring_config = load_yaml_config("scoring.yaml")
     markets_config = load_yaml_config("markets.yaml")

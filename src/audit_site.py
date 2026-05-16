@@ -7,7 +7,7 @@ import re
 from typing import Any
 from urllib.parse import urljoin, urlparse, urlunparse
 
-from . import db
+from . import actor_context, db
 from .cli_utils import build_parser, finish_command, setup_command
 from .pagespeed import run_pagespeed_for_prospect
 from .pagespeed import PAGESPEED_RETRIES, PAGESPEED_RETRY_DELAY_SECONDS, PAGESPEED_TIMEOUT_SECONDS
@@ -520,6 +520,7 @@ def _select_audit_prospects(
         ]
         if not force:
             clauses.append("(audit_data_status IS NULL OR audit_data_status <> 'READY')")
+        actor_context.append_actor_scope(clauses, params, "prospects")
     else:
         clauses = [
             "qualification_status = 'QUALIFIED'",
@@ -541,6 +542,7 @@ def _select_audit_prospects(
         if niche:
             clauses.append("niche = ?")
             params.append(niche)
+        actor_context.append_actor_scope(clauses, params, "prospects")
 
     sql = f"SELECT * FROM prospects WHERE {' AND '.join(clauses)} ORDER BY id"
     if limit is not None:
@@ -661,6 +663,10 @@ def main() -> int:
     )
     args = parser.parse_args()
     context = setup_command(args, COMMAND)
+    try:
+        actor_context.validate_actor_market_access(args.market, allow_global_scope=True)
+    except actor_context.ActorAccessError as exc:
+        raise SystemExit(str(exc)) from exc
     audit_mode = "fast" if args.fast else "deep"
     max_pages = args.max_pages
     if max_pages is None:

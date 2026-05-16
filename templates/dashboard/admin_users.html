@@ -1,0 +1,69 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Admin Users - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <h1>Admin</h1>
+    <p>Configured users, territory ownership, and read-only data counts.</p>
+  </div>
+  <div class="link-list">
+    <a class="button primary" href="{{ url_for('admin_users') }}">Users</a>
+    <a class="button" href="{{ url_for('admin_territories') }}">Territories</a>
+  </div>
+</section>
+
+<section class="table-panel admin-diagnostics-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Users</h2>
+      <p>Password hashes are checked only for presence; hash values are never shown.</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="compact-table admin-users-table">
+      <thead>
+        <tr>
+          <th>Username</th>
+          <th>Display Name</th>
+          <th>Role</th>
+          <th>Allowed States</th>
+          <th>Password Hash Env</th>
+          <th>Owned Markets</th>
+          <th>Prospects</th>
+          <th>Pending Review</th>
+          <th>Outreach Drafted</th>
+          <th>Outreach Sent</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for user in users %}
+          <tr>
+            <td><code>{{ user.username }}</code></td>
+            <td>{{ user.display_name }}</td>
+            <td><span class="pill">{{ user.role }}</span></td>
+            <td>{{ user.allowed_states }}</td>
+            <td>
+              {% if user.password_hash_present %}
+                <span class="pill status-pass">Yes</span>
+              {% else %}
+                <span class="pill status-fail">No</span>
+              {% endif %}
+            </td>
+            <td>{{ user.owned_market_count }}</td>
+            <td>{{ user.prospect_count }}</td>
+            <td>{{ user.pending_review_count }}</td>
+            <td>{{ user.outreach_drafted_count }}</td>
+            <td>{{ user.outreach_sent_count }}</td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="10" class="empty">No users configured.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

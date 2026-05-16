@@ -83,7 +83,12 @@
             <tr>
               <td><code>{{ market.key }}</code></td>
               <td>{{ market.label }}</td>
-              <td>{{ market.state }}</td>
+              <td>
+                {{ market.state or "Unknown" }}
+                {% if market.state_warning %}
+                  <span class="warning-chip">Missing/unknown state</span>
+                {% endif %}
+              </td>
               <td>{{ "Yes" if market.priority else "No" }}</td>
               <td>
                 <div class="market-cities">

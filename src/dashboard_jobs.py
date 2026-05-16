@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -161,6 +162,8 @@ def create_job(
     limit_count: int | None = None,
     dry_run: bool = True,
     metadata: dict[str, Any] | None = None,
+    requested_by_user: str | None = None,
+    market_state: str | None = None,
 ) -> str:
     if job_type not in ALLOWED_JOBS:
         raise ValueError("Unsupported dashboard job type.")
@@ -168,6 +171,10 @@ def create_job(
         raise ValueError("Limit must be a positive integer.")
 
     metadata = dict(metadata or {})
+    if requested_by_user:
+        metadata["requested_by_user"] = requested_by_user
+    if market_state:
+        metadata["market_state"] = market_state
     db_path = metadata.get("db_path")
     command_options = metadata.get("command_options")
     if not isinstance(command_options, dict):
@@ -193,17 +200,20 @@ def create_job(
         connection.execute(
             """
             INSERT INTO dashboard_jobs (
-                job_key, job_type, status, market, niche, limit_count, dry_run,
-                command_json, metadata_json, log_path, created_at, updated_at
-            ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                job_key, job_type, status, market, market_state, niche,
+                limit_count, dry_run, requested_by_user, command_json,
+                metadata_json, log_path, created_at, updated_at
+            ) VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_key,
                 job_type,
                 market or None,
+                market_state or None,
                 niche or None,
                 limit_count,
                 1 if dry_run else 0,
+                requested_by_user or None,
                 json.dumps(command),
                 json.dumps(metadata, sort_keys=True),
                 log_path,
@@ -225,6 +235,8 @@ def create_full_pipeline_job(
     dry_run_all: bool = True,
     audit_fast: bool = False,
     metadata: dict[str, Any] | None = None,
+    requested_by_user: str | None = None,
+    market_state: str | None = None,
 ) -> str:
     if not market:
         raise ValueError("Full pipeline requires a selected market.")
@@ -235,7 +247,12 @@ def create_full_pipeline_job(
         raise ValueError("Pipeline limits must be positive integers.")
 
     metadata = dict(metadata or {})
+    if requested_by_user:
+        metadata["requested_by_user"] = requested_by_user
+    if market_state:
+        metadata["market_state"] = market_state
     db_path = metadata.get("db_path")
+    include_reconcile_statuses = bool(metadata.get("include_reconcile_statuses", True))
     steps = build_full_pipeline_steps(
         market=market,
         niches=niches,
@@ -245,6 +262,7 @@ def create_full_pipeline_job(
         dry_run_all=dry_run_all,
         audit_fast=audit_fast,
         db_path=db_path,
+        include_reconcile_statuses=include_reconcile_statuses,
     )
     metadata.update(
         {
@@ -254,6 +272,7 @@ def create_full_pipeline_job(
             "artifact_limit": artifact_limit,
             "dry_run_all": bool(dry_run_all),
             "audit_mode": "fast" if audit_fast else "deep",
+            "include_reconcile_statuses": include_reconcile_statuses,
         }
     )
 
@@ -268,16 +287,19 @@ def create_full_pipeline_job(
         connection.execute(
             """
             INSERT INTO dashboard_jobs (
-                job_key, job_type, status, market, niche, limit_count, dry_run,
-                command_json, metadata_json, log_path, created_at, updated_at
-            ) VALUES (?, 'full_pipeline', 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                job_key, job_type, status, market, market_state, niche,
+                limit_count, dry_run, requested_by_user, command_json,
+                metadata_json, log_path, created_at, updated_at
+            ) VALUES (?, 'full_pipeline', 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 job_key,
                 market,
+                market_state or None,
                 ",".join(niches),
                 per_niche_places_limit,
                 1 if dry_run_all else 0,
+                requested_by_user or None,
                 json.dumps(command),
                 json.dumps(metadata, sort_keys=True),
                 log_path,
@@ -457,6 +479,75 @@ def latest_command_finished_payload(log_text: str) -> dict[str, Any]:
     return fallback
 
 
+def actor_env_for_job(job: dict[str, Any]) -> dict[str, str] | None:
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    username = str(job.get("requested_by_user") or metadata.get("requested_by_user") or "").strip()
+    if not username:
+        return None
+
+    role = str(metadata.get("requested_by_role") or "").strip().lower() or "user"
+    allowed_states = metadata.get("requested_by_allowed_states")
+    if isinstance(allowed_states, str):
+        allowed_values = [value.strip() for value in allowed_states.split(",") if value.strip()]
+    elif isinstance(allowed_states, list):
+        allowed_values = [str(value).strip() for value in allowed_states if str(value).strip()]
+    else:
+        allowed_values = []
+    if role == "admin" or "*" in allowed_values:
+        allowed_text = "*"
+    else:
+        allowed_text = ",".join(allowed_values)
+
+    actor_env = {
+        "APP_ACTOR_USERNAME": username,
+        "APP_ACTOR_ROLE": role,
+        "APP_ACTOR_ALLOWED_STATES": allowed_text,
+        "APP_ACTOR_MARKET": str(job.get("market") or metadata.get("market") or ""),
+        "APP_ACTOR_MARKET_STATE": str(job.get("market_state") or metadata.get("market_state") or ""),
+    }
+    return actor_env
+
+
+def subprocess_env_for_job(job: dict[str, Any]) -> dict[str, str]:
+    env = os.environ.copy()
+    actor_env = actor_env_for_job(job)
+    if actor_env:
+        env.update(actor_env)
+    return env
+
+
+def log_actor_context_for_job(job: dict[str, Any], *, db_path: str | Path | None = None) -> None:
+    metadata = job.get("metadata") if isinstance(job.get("metadata"), dict) else {}
+    allowed_states = metadata.get("requested_by_allowed_states")
+    if isinstance(allowed_states, list):
+        allowed_text = ",".join(str(value) for value in allowed_states)
+    elif allowed_states is None:
+        allowed_text = ""
+    else:
+        allowed_text = str(allowed_states)
+    lines = [
+        "actor context:",
+        f"  requested_by_user={job.get('requested_by_user') or metadata.get('requested_by_user') or ''}",
+        f"  actor_role={metadata.get('requested_by_role') or ''}",
+        f"  market={job.get('market') or ''}",
+        f"  market_state={job.get('market_state') or metadata.get('market_state') or ''}",
+        f"  allowed_states={allowed_text}",
+        "",
+    ]
+    append_job_log(str(job["job_key"]), "\n".join(lines), db_path=db_path)
+
+
+def log_command_started(
+    job: dict[str, Any],
+    command: list[Any],
+    *,
+    db_path: str | Path | None = None,
+    prefix: str = "running",
+) -> None:
+    append_job_log(str(job["job_key"]), f"{prefix}: {json.dumps(command)}\n", db_path=db_path)
+    log_actor_context_for_job(job, db_path=db_path)
+
+
 def summary_label(key: str) -> str:
     return SUMMARY_LABELS.get(key, key.replace("_", " ").strip().title())
 
@@ -520,6 +611,7 @@ def build_full_pipeline_steps(
     dry_run_all: bool,
     audit_fast: bool = False,
     db_path: str | Path | None = None,
+    include_reconcile_statuses: bool = True,
 ) -> list[dict[str, Any]]:
     steps: list[dict[str, Any]] = []
     for niche in niches:
@@ -597,6 +689,10 @@ def build_full_pipeline_steps(
                     },
                 ),
             },
+        ]
+    )
+    if include_reconcile_statuses:
+        steps.append(
             {
                 "label": "Reconcile Statuses",
                 "job_type": "reconcile_statuses",
@@ -607,9 +703,8 @@ def build_full_pipeline_steps(
                         "db_path": db_path,
                     },
                 ),
-            },
-        ]
-    )
+            }
+        )
     return steps
 
 
@@ -643,14 +738,16 @@ def _run_job_worker(job_key: str, db_path: str | Path | None = None) -> None:
             return
 
         mark_job_running(job_key, db_path=db_path)
-        append_job_log(job_key, f"running: {json.dumps(command)}\n\n", db_path=db_path)
+        log_command_started(job, command, db_path=db_path)
         log_path = project_path(str(job.get("log_path") or log_path_for(job_key)))
         log_path.parent.mkdir(parents=True, exist_ok=True)
+        env = subprocess_env_for_job(job)
 
         with log_path.open("a", encoding="utf-8", errors="replace") as handle:
             process = subprocess.Popen(
                 command,
                 cwd=PROJECT_ROOT,
+                env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -685,6 +782,8 @@ def _run_full_pipeline_worker(job: dict[str, Any], db_path: str | Path | None = 
     log_path = project_path(str(job.get("log_path") or log_path_for(job_key)))
     log_path.parent.mkdir(parents=True, exist_ok=True)
     append_job_log(job_key, f"running full_pipeline with {len(steps)} steps\n\n", db_path=db_path)
+    log_actor_context_for_job(job, db_path=db_path)
+    env = subprocess_env_for_job(job)
 
     with log_path.open("a", encoding="utf-8", errors="replace") as handle:
         for index, step in enumerate(steps, start=1):
@@ -701,6 +800,7 @@ def _run_full_pipeline_worker(job: dict[str, Any], db_path: str | Path | None = 
             process = subprocess.Popen(
                 command,
                 cwd=PROJECT_ROOT,
+                env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,

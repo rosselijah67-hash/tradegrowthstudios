@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from . import db, outreach_copy
+from . import actor_context, db, outreach_copy
 from .cli_utils import build_parser, finish_command, setup_command
 from .config import project_path
 
@@ -298,6 +298,7 @@ def _select_candidates(
     if niche:
         clauses.append("niche = ?")
         params.append(niche)
+    actor_context.append_actor_scope(clauses, params, "prospects")
 
     sql = f"""
         SELECT *
@@ -1351,7 +1352,19 @@ def main() -> int:
     if args.clean_followups and selected_steps != (1,):
         parser.error("--clean-followups is only valid when generating Step 1 only.")
 
+    try:
+        actor_context.validate_actor_market_access(args.market, allow_global_scope=True)
+    except actor_context.ActorAccessError as exc:
+        raise SystemExit(str(exc)) from exc
+
     connection = db.init_db(args.db_path)
+    try:
+        if args.prospect_id is not None:
+            actor_context.validate_actor_prospect_access(connection, args.prospect_id)
+    except actor_context.ActorAccessError as exc:
+        connection.close()
+        raise SystemExit(str(exc)) from exc
+
     prospects = _select_candidates(
         connection,
         market=args.market,
@@ -1404,6 +1417,7 @@ def main() -> int:
         drafts=draft_count,
         steps=list(selected_steps),
         first_batch_mode=first_batch_mode,
+        **actor_context.actor_summary_fields(args.market),
     )
     return 0
 

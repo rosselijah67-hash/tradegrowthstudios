@@ -7,6 +7,7 @@ import logging
 import os
 from dataclasses import dataclass
 
+from . import actor_context
 from .config import load_env
 from .db import init_db
 from .logging_config import configure_logging
@@ -51,8 +52,10 @@ def setup_command(args: argparse.Namespace, command_name: str) -> CommandContext
             "limit": args.limit,
             "market": args.market,
             "niche": args.niche,
+            **actor_context.actor_display_fields(),
         },
     )
+    actor_context.log_actor_scope(logger)
     return CommandContext(args=args, logger=logger)
 
 

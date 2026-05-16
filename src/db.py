@@ -31,6 +31,8 @@ CREATE TABLE IF NOT EXISTS prospects (
     state TEXT,
     city_guess TEXT,
     state_guess TEXT,
+    market_state TEXT,
+    owner_username TEXT,
     postal_code TEXT,
     phone TEXT,
     website_url TEXT,
@@ -161,6 +163,8 @@ CREATE TABLE IF NOT EXISTS outreach_queue (
     campaign TEXT NOT NULL,
     step INTEGER NOT NULL,
     status TEXT NOT NULL DEFAULT 'queued',
+    owner_username TEXT,
+    market_state TEXT,
     send_after TEXT,
     subject TEXT,
     draft_artifact_id INTEGER,
@@ -203,9 +207,11 @@ CREATE TABLE IF NOT EXISTS dashboard_jobs (
     job_type TEXT NOT NULL,
     status TEXT NOT NULL,
     market TEXT,
+    market_state TEXT,
     niche TEXT,
     limit_count INTEGER,
     dry_run INTEGER NOT NULL DEFAULT 1,
+    requested_by_user TEXT,
     command_json TEXT NOT NULL DEFAULT '[]',
     metadata_json TEXT NOT NULL DEFAULT '{}',
     log_path TEXT,
@@ -220,6 +226,112 @@ CREATE INDEX IF NOT EXISTS idx_dashboard_jobs_status
 
 CREATE INDEX IF NOT EXISTS idx_dashboard_jobs_created
     ON dashboard_jobs(created_at);
+"""
+
+
+QUOTE_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS quotes (
+    id INTEGER PRIMARY KEY,
+    quote_key TEXT UNIQUE NOT NULL,
+    prospect_id INTEGER NOT NULL,
+    owner_username TEXT,
+    market_state TEXT,
+    version INTEGER DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (status IN ('draft', 'sent', 'accepted', 'declined', 'expired', 'superseded')),
+    package_key TEXT,
+    package_name TEXT,
+    title TEXT,
+    client_business_name TEXT,
+    client_contact_name TEXT,
+    client_email TEXT,
+    client_phone TEXT,
+    website_url TEXT,
+    one_time_subtotal_cents INTEGER DEFAULT 0,
+    one_time_discount_cents INTEGER DEFAULT 0,
+    one_time_total_cents INTEGER DEFAULT 0,
+    recurring_monthly_total_cents INTEGER DEFAULT 0,
+    term_months INTEGER DEFAULT 0,
+    deposit_percent INTEGER DEFAULT 50,
+    deposit_due_cents INTEGER DEFAULT 0,
+    balance_due_cents INTEGER DEFAULT 0,
+    valid_until TEXT,
+    client_visible_notes TEXT,
+    assumptions_json TEXT DEFAULT '{}',
+    internal_notes TEXT,
+    metadata_json TEXT DEFAULT '{}',
+    supersedes_quote_id INTEGER,
+    created_at TEXT,
+    updated_at TEXT,
+    sent_at TEXT,
+    accepted_at TEXT,
+    declined_at TEXT,
+    FOREIGN KEY (prospect_id) REFERENCES prospects(id) ON DELETE CASCADE,
+    FOREIGN KEY (supersedes_quote_id) REFERENCES quotes(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_quotes_prospect
+    ON quotes(prospect_id);
+
+CREATE INDEX IF NOT EXISTS idx_quotes_status
+    ON quotes(status);
+
+CREATE INDEX IF NOT EXISTS idx_quotes_updated
+    ON quotes(updated_at);
+
+CREATE TABLE IF NOT EXISTS quote_line_items (
+    id INTEGER PRIMARY KEY,
+    quote_id INTEGER NOT NULL,
+    item_key TEXT,
+    item_type TEXT
+        CHECK (
+            item_type IS NULL
+            OR item_type IN ('package', 'addon', 'recurring', 'discount', 'custom')
+        ),
+    category TEXT,
+    name TEXT NOT NULL,
+    description TEXT,
+    quantity REAL DEFAULT 1,
+    unit_price_cents INTEGER DEFAULT 0,
+    line_total_cents INTEGER DEFAULT 0,
+    recurring_interval TEXT
+        CHECK (recurring_interval IS NULL OR recurring_interval IN ('monthly')),
+    is_optional INTEGER DEFAULT 0,
+    is_included INTEGER DEFAULT 0,
+    sort_order INTEGER DEFAULT 0,
+    metadata_json TEXT DEFAULT '{}',
+    created_at TEXT,
+    updated_at TEXT,
+    FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_quote_line_items_quote
+    ON quote_line_items(quote_id);
+
+CREATE INDEX IF NOT EXISTS idx_quote_line_items_type
+    ON quote_line_items(item_type);
+
+CREATE TABLE IF NOT EXISTS quote_events (
+    id INTEGER PRIMARY KEY,
+    quote_id INTEGER,
+    prospect_id INTEGER,
+    event_type TEXT,
+    status TEXT,
+    note TEXT,
+    metadata_json TEXT,
+    created_at TEXT,
+    FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL,
+    FOREIGN KEY (prospect_id) REFERENCES prospects(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_quote_events_quote
+    ON quote_events(quote_id);
+
+CREATE INDEX IF NOT EXISTS idx_quote_events_prospect
+    ON quote_events(prospect_id);
+
+CREATE INDEX IF NOT EXISTS idx_quote_events_created
+    ON quote_events(created_at);
 """
 
 
@@ -254,6 +366,26 @@ PROSPECT_COLUMN_MIGRATIONS = {
 
 ARTIFACT_COLUMN_MIGRATIONS = {
     "artifact_url": "TEXT",
+}
+
+
+TERRITORY_COLUMN_MIGRATIONS = {
+    "prospects": {
+        "market_state": "TEXT",
+        "owner_username": "TEXT",
+    },
+    "dashboard_jobs": {
+        "requested_by_user": "TEXT",
+        "market_state": "TEXT",
+    },
+    "outreach_queue": {
+        "owner_username": "TEXT",
+        "market_state": "TEXT",
+    },
+    "quotes": {
+        "owner_username": "TEXT",
+        "market_state": "TEXT",
+    },
 }
 
 
@@ -304,8 +436,30 @@ def init_db(db_path: str | Path | None = None) -> sqlite3.Connection:
     connection.executescript(SCHEMA_SQL)
     ensure_prospect_place_columns(connection)
     ensure_artifact_columns(connection)
+    ensure_quote_schema(connection)
+    ensure_territory_columns(connection)
     connection.commit()
     return connection
+
+
+def ensure_quote_schema(connection: sqlite3.Connection) -> None:
+    """Create quote module tables and indexes without touching prospect state."""
+
+    connection.executescript(QUOTE_SCHEMA_SQL)
+    ensure_table_columns(connection, "quotes", TERRITORY_COLUMN_MIGRATIONS["quotes"])
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_quotes_market_state ON quotes(market_state)")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_quotes_owner_username ON quotes(owner_username)"
+    )
+
+
+def ensure_quote_schema_for_path(db_path: str | Path | None = None) -> None:
+    connection = connect(db_path)
+    try:
+        ensure_quote_schema(connection)
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def ensure_prospect_place_columns(connection: sqlite3.Connection) -> None:
@@ -347,6 +501,57 @@ def ensure_artifact_columns(connection: sqlite3.Connection) -> None:
             )
 
 
+def ensure_table_columns(
+    connection: sqlite3.Connection,
+    table_name: str,
+    column_migrations: dict[str, str],
+) -> None:
+    existing_columns = {
+        row["name"] for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+    if not existing_columns:
+        return
+    for column_name, column_definition in column_migrations.items():
+        if column_name not in existing_columns:
+            connection.execute(
+                f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_definition}"
+            )
+
+
+def ensure_territory_columns(connection: sqlite3.Connection) -> None:
+    """Add user/state ownership columns to existing single-database installs."""
+
+    for table_name, column_migrations in TERRITORY_COLUMN_MIGRATIONS.items():
+        ensure_table_columns(connection, table_name, column_migrations)
+
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_prospects_market_state ON prospects(market_state)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_prospects_owner_username ON prospects(owner_username)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dashboard_jobs_market_state "
+        "ON dashboard_jobs(market_state)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_dashboard_jobs_requested_by_user "
+        "ON dashboard_jobs(requested_by_user)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_outreach_queue_market_state "
+        "ON outreach_queue(market_state)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_outreach_queue_owner_username "
+        "ON outreach_queue(owner_username)"
+    )
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_quotes_market_state ON quotes(market_state)")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_quotes_owner_username ON quotes(owner_username)"
+    )
+
+
 def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     return {key: row[key] for key in row.keys()}
 
@@ -381,6 +586,8 @@ def upsert_prospect(connection: sqlite3.Connection, data: dict[str, Any]) -> int
         "state": data.get("state"),
         "city_guess": data.get("city_guess"),
         "state_guess": data.get("state_guess"),
+        "market_state": data.get("market_state"),
+        "owner_username": data.get("owner_username"),
         "postal_code": data.get("postal_code"),
         "phone": data.get("phone"),
         "website_url": data.get("website_url"),
@@ -403,13 +610,13 @@ def upsert_prospect(connection: sqlite3.Connection, data: dict[str, Any]) -> int
         INSERT INTO prospects (
             prospect_key, source, source_id, place_id, business_name, market, niche,
             address, formatted_address, city, state, city_guess, state_guess,
-            postal_code, phone, website_url, domain, rating, user_rating_count,
+            market_state, owner_username, postal_code, phone, website_url, domain, rating, user_rating_count,
             primary_type, types_json, business_status, status, qualification_status,
             next_action, metadata_json, created_at, updated_at
         ) VALUES (
             :prospect_key, :source, :source_id, :place_id, :business_name, :market, :niche,
             :address, :formatted_address, :city, :state, :city_guess, :state_guess,
-            :postal_code, :phone, :website_url, :domain, :rating, :user_rating_count,
+            :market_state, :owner_username, :postal_code, :phone, :website_url, :domain, :rating, :user_rating_count,
             :primary_type, :types_json, :business_status, :status, :qualification_status,
             :next_action, :metadata_json, :created_at, :updated_at
         )
@@ -426,6 +633,8 @@ def upsert_prospect(connection: sqlite3.Connection, data: dict[str, Any]) -> int
             state = COALESCE(excluded.state, prospects.state),
             city_guess = COALESCE(excluded.city_guess, prospects.city_guess),
             state_guess = COALESCE(excluded.state_guess, prospects.state_guess),
+            market_state = COALESCE(excluded.market_state, prospects.market_state),
+            owner_username = COALESCE(excluded.owner_username, prospects.owner_username),
             postal_code = COALESCE(excluded.postal_code, prospects.postal_code),
             phone = COALESCE(excluded.phone, prospects.phone),
             website_url = COALESCE(excluded.website_url, prospects.website_url),
@@ -664,6 +873,9 @@ def main() -> int:
             "outreach_events",
             "outreach_queue",
             "suppression_list",
+            "quotes",
+            "quote_line_items",
+            "quote_events",
         ],
     )
     print(json.dumps({"database_ready": True, "counts": counts}, sort_keys=True))

@@ -40,6 +40,7 @@
           <th>Website</th>
           <th>Status</th>
           <th>Next Action</th>
+          <th>Quote</th>
           <th>Updated</th>
           <th>Case</th>
         </tr>
@@ -59,12 +60,24 @@
             </td>
             <td>{{ prospect.status or "" }}</td>
             <td>{{ prospect.next_action or "" }}</td>
+            <td>
+              {% if prospect.quote_count %}
+              <span class="crm-quote-cell">
+                <strong>{{ prospect.latest_quote_status|pretty_label }}</strong>
+                {{ prospect.latest_quote_amount_cents|money }}
+                {% if prospect.latest_quote_monthly_cents %}<small>+ {{ prospect.latest_quote_monthly_cents|money }}/mo</small>{% endif %}
+                <small>{{ prospect.quote_count }} quote{{ "" if prospect.quote_count == 1 else "s" }}</small>
+              </span>
+              {% else %}
+              <span class="muted">No quote</span>
+              {% endif %}
+            </td>
             <td>{{ prospect.updated_at or "" }}</td>
             <td><a class="table-action" href="{{ url_for('case_file', prospect_id=prospect.id) }}">Open</a></td>
           </tr>
         {% else %}
           <tr>
-            <td colspan="9" class="empty">No prospects in this CRM stage.</td>
+            <td colspan="10" class="empty">No prospects in this CRM stage.</td>
           </tr>
         {% endfor %}
       </tbody>

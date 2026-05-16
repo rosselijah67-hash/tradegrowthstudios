@@ -9,7 +9,7 @@ This runbook deploys the private Trade Growth Studio CRM to Railway while keepin
 - Public packets: same Railway app at `https://crm.tradegrowthstudios.com/p/<token>/` at first, or `audit.tradegrowthstudios.com` later.
 - Database: SQLite at `data/leads.db`, persisted on a Railway volume.
 - App server: Docker + Gunicorn.
-- Access: dashboard login from env vars.
+- Access: multi-user dashboard login from `config/users.yaml` plus env-var password hashes.
 
 ## Files Added For Railway
 
@@ -17,24 +17,20 @@ This runbook deploys the private Trade Growth Studio CRM to Railway while keepin
 - `Dockerfile` now starts Gunicorn instead of Flask's dev server.
 - `scripts/docker-entrypoint.sh` can symlink mutable folders into one Railway volume.
 - `scripts/backup_sqlite.py` creates safe SQLite backups.
-- Dashboard login is controlled by env vars.
+- Dashboard login is controlled by configured users and Railway auth variables.
 
 ## One-Time Local Prep
 
-Generate a password hash:
+Generate the app secret and user password hashes:
 
 ```powershell
 cd "C:\Users\rosse\OneDrive\Desktop\ROSS WEB DESIGN\ai-local-site-leads"
-.\.venv\Scripts\python.exe -c "from werkzeug.security import generate_password_hash; import getpass; print(generate_password_hash(getpass.getpass('CRM password: ')))"
+.\.venv\Scripts\python.exe scripts\generate_password_hashes.py --generate-secret
 ```
 
-Generate a Flask secret:
+The script reads `config/users.yaml`, prompts locally for each configured user's password, and prints environment variable assignments for `APP_SECRET_KEY` plus each `AUTH_*_PASSWORD_HASH` value. Paste only the generated secret and hash values into Railway Variables. Railway should never receive plaintext passwords, and plaintext passwords should never be committed.
 
-```powershell
-.\.venv\Scripts\python.exe -c "import secrets; print(secrets.token_urlsafe(48))"
-```
-
-Keep both values private.
+Keep real hashes, real local `.env` files, and `APP_SECRET_KEY` out of git. If a configured user's password hash variable is missing in Railway, that user cannot log in until the variable is added.
 
 ## Railway Setup
 
@@ -54,15 +50,18 @@ Keep both values private.
 DATABASE_PATH=data/leads.db
 USE_STORAGE_SYMLINKS=1
 STORAGE_ROOT=/app/storage
-DASHBOARD_AUTH_ENABLED=true
-DASHBOARD_USERNAME=<your-admin-user>
-DASHBOARD_PASSWORD_HASH=<generated-password-hash>
-FLASK_SECRET_KEY=<generated-secret>
+APP_SECRET_KEY=<generated-secret>
+AUTH_ADMIN_PASSWORD_HASH=<generated-hash-for-admin>
+AUTH_QWHITE_PASSWORD_HASH=<generated-hash-for-qwhite>
+AUTH_JROSS_PASSWORD_HASH=<generated-hash-for-jross>
+AUTH_AG_PASSWORD_HASH=<generated-hash-for-ag>
 LOG_LEVEL=INFO
 PUBLIC_PACKET_BASE_URL=https://crm.tradegrowthstudios.com
 DASHBOARD_DB_IMPORT_ENABLED=false
 DASHBOARD_MEDIA_IMPORT_ENABLED=false
 ```
+
+`APP_SECRET_KEY` must be set in production. Do not leave it blank on Railway. The `AUTH_*_PASSWORD_HASH` variables must contain the hash values printed by `scripts/generate_password_hashes.py`, not plaintext passwords.
 
 7. Add outbound/email variables:
 
@@ -84,6 +83,16 @@ OUTREACH_UNSUBSCRIBE_EMAIL=unsubscribe@tradegrowthstudios.com
 9. Open the Railway-provided URL and confirm `/login` appears.
 10. Add custom domain `crm.tradegrowthstudios.com`.
 11. Add the DNS record Railway gives you in Cloudflare or Namecheap DNS.
+
+## Post-Deploy Login And Territory Checks
+
+After deploy, test with the configured accounts and their out-of-band passwords:
+
+- `ADMIN` can log in and sees all markets.
+- `QWHITE` can log in and sees only `OH`, `KY`, `TX`, `FL`, `MI`, `NC`.
+- `JROSS` can log in and sees only `IN`, `PA`, `TN`, `AR`, `OK`, `CO`.
+- `AG` can log in and sees only `MO`, `IL`, `GA`, `AL`, `SC`.
+- As a non-admin, try adding a market outside that user's states and confirm the exact error: `you do not own this market`.
 
 ## Uploading The Existing Database
 

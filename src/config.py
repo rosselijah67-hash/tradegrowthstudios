@@ -122,6 +122,7 @@ def _load_simple_yaml(text: str) -> dict[str, Any]:
         else:
             parent[key] = {}
             last_key_at_indent[indent + 2] = (parent, key)
+            last_key_at_indent[indent] = (parent, key)
             stack.append((indent, parent[key]))
 
     return result

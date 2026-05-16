@@ -11,11 +11,15 @@
   <a class="button primary" href="{{ url_for('leads', market=market_filter.selected) if market_filter.selected else url_for('leads') }}">Open Leads</a>
 </section>
 
+{% if message %}
+  <div class="notice {{ message.status }}">{{ message.message }}</div>
+{% endif %}
+
 <form class="market-filter-form" method="get" action="{{ url_for('overview') }}">
   <label>
     <span>Market</span>
     <select name="market">
-      <option value="">All markets</option>
+      <option value="">{% if dashboard_current_user.role == "admin" %}All markets{% else %}All accessible markets{% endif %}</option>
       {% for option in market_filter.options %}
         <option value="{{ option.value }}" {% if market_filter.selected == option.value %}selected{% endif %}>{{ option.label }}</option>
       {% endfor %}

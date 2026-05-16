@@ -21,13 +21,20 @@
       <a href="{{ url_for('trash_can') }}" class="{% if active_page == 'trash' %}active{% endif %}">Trash</a>
       <a href="{{ url_for('review_queue') }}" class="{% if active_page == 'review' %}active{% endif %}">Review</a>
       <a href="{{ url_for('crm') }}" class="{% if active_page == 'crm' %}active{% endif %}">CRM</a>
+      <a href="{{ url_for('quotes_list') }}" class="{% if active_page == 'quotes' %}active{% endif %}">Quotes</a>
       <a href="{{ url_for('outbound') }}" class="{% if active_page == 'outbound' %}active{% endif %}">Outbound</a>
       <a href="{{ url_for('send_page') }}" class="{% if active_page == 'send' %}active{% endif %}">Send</a>
+      {% if dashboard_current_user and dashboard_current_user.role == 'admin' %}
+      <a href="{{ url_for('admin_users') }}" class="{% if active_page == 'admin' %}active{% endif %}">Admin</a>
+      {% endif %}
       <a href="{{ url_for('health') }}">Health</a>
-      {% if dashboard_auth_enabled %}
-      <form class="nav-logout" method="post" action="{{ url_for('logout') }}">
-        <button class="button" type="submit">Logout{% if dashboard_user %} {{ dashboard_user }}{% endif %}</button>
-      </form>
+      {% if dashboard_current_user %}
+      <div class="nav-user" aria-label="Current user">
+        <span class="nav-user-name">{{ dashboard_current_user.username }}</span>
+        <span>{{ dashboard_current_user.role }}</span>
+        <span class="nav-user-states">{{ dashboard_allowed_states_summary }}</span>
+      </div>
+      <a href="{{ url_for('logout') }}">Logout</a>
       {% endif %}
     </nav>
   </header>

@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -18,16 +19,19 @@ import sys
 import threading
 import zipfile
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from email.message import EmailMessage
 from email.utils import formataddr
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
-from flask import Flask, abort, current_app, g, jsonify, redirect, render_template, request, send_file, session, url_for
-from werkzeug.security import check_password_hash
+from flask import Flask, abort, current_app, g, jsonify, make_response, redirect, render_template, request, send_file, session, url_for
+from flask_login import LoginManager, current_user as flask_current_user, login_required, login_user as flask_login_user, logout_user as flask_logout_user
 
-from . import dashboard_jobs, state
+from . import auth as auth_service
+from . import dashboard_jobs, db as pipeline_db, quote_exports, quotes as quote_service, state
+from . import territories
 from .config import (
     PROJECT_ROOT,
     _load_simple_yaml,
@@ -152,6 +156,7 @@ PIPELINE_COUNT_BUCKETS = [
 ]
 
 PIPELINE_JOB_LOCK = threading.Lock()
+logger = logging.getLogger(__name__)
 
 PIPELINE_STAGE_BUCKETS = list(state.PIPELINE_STAGE_BUCKETS)
 
@@ -162,6 +167,12 @@ CRM_STAGE_LABELS = dict(CRM_STAGES)
 CRM_NEXT_ACTIONS = dict(state.CRM_NEXT_ACTIONS)
 
 SALES_PACKET_STAGES = {"CONTACT_MADE", "CALL_BOOKED", "PROPOSAL_SENT", "CLOSED_WON"}
+QUOTE_MARK_SENT_PROTECTED_STATUSES = {
+    state.ProspectStatus.CLOSED_WON,
+    state.ProspectStatus.CLOSED_LOST,
+    state.ProspectStatus.PROJECT_ACTIVE,
+    state.ProspectStatus.PROJECT_COMPLETE,
+}
 
 HIGH_TICKET_NICHE_KEYWORDS = {
     "roof",
@@ -443,11 +454,14 @@ def load_configured_markets() -> list[dict[str, Any]]:
     configured = []
     for key, raw_market in markets.items():
         raw = raw_market if isinstance(raw_market, dict) else {}
+        raw_state = raw.get("state")
+        state_code = territories.normalize_state(raw_state)
         configured.append(
             {
                 "key": str(key),
                 "label": str(raw.get("label") or key),
-                "state": str(raw.get("state") or ""),
+                "state": state_code or str(raw_state or "").strip(),
+                "state_warning": state_code is None,
                 "priority": bool(raw.get("priority")),
                 "included_cities": list_unique_strings(
                     raw.get("included_cities") or raw.get("cities") or []
@@ -488,8 +502,316 @@ def market_option_label(market: dict[str, Any]) -> str:
     return label if label == key else f"{label} ({key})"
 
 
-def build_market_options(selected_market: str = "") -> list[dict[str, Any]]:
-    configured = load_configured_markets()
+def territory_denial_message() -> str:
+    return territories.territory_error_message()
+
+
+def abort_territory_denied() -> None:
+    abort(make_response(territory_denial_message(), 403))
+
+
+def current_dashboard_user() -> auth_service.User | None:
+    return auth_service.current_app_user()
+
+
+def dashboard_user_is_admin(user: auth_service.User | None = None) -> bool:
+    return auth_service.is_admin(user if user is not None else current_dashboard_user())
+
+
+def current_user_allowed_states(
+    user: auth_service.User | None = None,
+) -> tuple[str, ...]:
+    user = user if user is not None else current_dashboard_user()
+    if user is None or dashboard_user_is_admin(user):
+        return ()
+    return tuple(
+        state_code
+        for state_code in (territories.normalize_state(value) for value in user.allowed_states)
+        if state_code
+    )
+
+
+def current_user_can_access_state(state_code: str | None, user: auth_service.User | None = None) -> bool:
+    return auth_service.user_can_access_state(
+        user if user is not None else current_dashboard_user(),
+        state_code,
+    )
+
+
+def visible_configured_markets(user: auth_service.User | None = None) -> list[dict[str, Any]]:
+    user = user if user is not None else current_dashboard_user()
+    markets = load_configured_markets()
+    if dashboard_user_is_admin(user):
+        return markets
+    return [
+        market
+        for market in markets
+        if not market.get("state_warning")
+        and current_user_can_access_state(str(market.get("state") or ""), user)
+    ]
+
+
+def visible_market_keys(user: auth_service.User | None = None) -> list[str]:
+    return [market["key"] for market in visible_configured_markets(user)]
+
+
+def accessible_market_keys_for_current_user(
+    user: auth_service.User | None = None,
+) -> list[str]:
+    return visible_market_keys(user)
+
+
+def configured_market_state(market_key: str | None) -> str | None:
+    if not market_key:
+        return None
+    return territories.get_market_state(market_key, load_markets_document())
+
+
+def current_user_can_access_market(
+    market_key: str | None,
+    user: auth_service.User | None = None,
+) -> bool:
+    if not market_key or market_key == UNKNOWN_MARKET_VALUE:
+        return False
+    return current_user_can_access_state(configured_market_state(market_key), user)
+
+
+def normalize_selected_market_for_user(
+    selected_market: str,
+    *,
+    allow_unknown_for_admin: bool = False,
+    user: auth_service.User | None = None,
+) -> tuple[str, str]:
+    selected_market = str(selected_market or "").strip()
+    if not selected_market:
+        return "", ""
+
+    user = user if user is not None else current_dashboard_user()
+    if selected_market == UNKNOWN_MARKET_VALUE:
+        if allow_unknown_for_admin and dashboard_user_is_admin(user):
+            return selected_market, ""
+        return "", territory_denial_message()
+
+    if dashboard_user_is_admin(user):
+        return selected_market, ""
+    if current_user_can_access_market(selected_market, user):
+        return selected_market, ""
+    return "", territory_denial_message()
+
+
+def market_visibility_clause(user: auth_service.User | None = None) -> tuple[str, list[Any]]:
+    user = user if user is not None else current_dashboard_user()
+    if dashboard_user_is_admin(user):
+        return "1 = 1", []
+    keys = visible_market_keys(user)
+    if not keys:
+        return "1 = 0", []
+    placeholders = ", ".join("?" for _ in keys)
+    return f"market IN ({placeholders})", list(keys)
+
+
+def sql_column(table_alias: str | None, column_name: str) -> str:
+    if not table_alias:
+        return column_name
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", table_alias):
+        raise ValueError("table_alias must be a simple SQL identifier.")
+    return f"{table_alias}.{column_name}"
+
+
+def prospect_scope_clause(
+    table_alias: str | None = "prospects",
+    *,
+    user: auth_service.User | None = None,
+) -> tuple[str, list[Any]]:
+    user = user if user is not None else current_dashboard_user()
+    if dashboard_user_is_admin(user):
+        return "1 = 1", []
+
+    allowed_states = list(current_user_allowed_states(user))
+    if not allowed_states:
+        return "1 = 0", []
+
+    state_col = sql_column(table_alias, "market_state")
+    market_col = sql_column(table_alias, "market")
+    raw_state_col = sql_column(table_alias, "state")
+    state_guess_col = sql_column(table_alias, "state_guess")
+    state_placeholders = ", ".join("?" for _ in allowed_states)
+    clauses = [
+        f"UPPER(COALESCE({state_col}, '')) IN ({state_placeholders})",
+    ]
+    params: list[Any] = list(allowed_states)
+
+    market_keys = accessible_market_keys_for_current_user(user)
+    if market_keys:
+        market_placeholders = ", ".join("?" for _ in market_keys)
+        clauses.append(
+            "("
+            f"TRIM(COALESCE({state_col}, '')) = '' "
+            f"AND {market_col} IN ({market_placeholders})"
+            ")"
+        )
+        params.extend(market_keys)
+
+    configured_keys = configured_market_keys()
+    if configured_keys:
+        configured_placeholders = ", ".join("?" for _ in configured_keys)
+        unconfigured_market_sql = (
+            f"({market_col} IS NULL OR TRIM({market_col}) = '' "
+            f"OR {market_col} NOT IN ({configured_placeholders}))"
+        )
+    else:
+        unconfigured_market_sql = "1 = 1"
+
+    clauses.append(
+        "("
+        f"TRIM(COALESCE({state_col}, '')) = '' "
+        f"AND {unconfigured_market_sql} "
+        f"AND UPPER(COALESCE({raw_state_col}, '')) IN ({state_placeholders})"
+        ")"
+    )
+    if configured_keys:
+        params.extend(configured_keys)
+    params.extend(allowed_states)
+    clauses.append(
+        "("
+        f"TRIM(COALESCE({state_col}, '')) = '' "
+        f"AND {unconfigured_market_sql} "
+        f"AND UPPER(COALESCE({state_guess_col}, '')) IN ({state_placeholders})"
+        ")"
+    )
+    if configured_keys:
+        params.extend(configured_keys)
+    params.extend(allowed_states)
+    return f"({' OR '.join(clauses)})", params
+
+
+def apply_prospect_scope(
+    sql_or_clauses: str | list[str],
+    params: list[Any],
+    table_alias: str | None = "prospects",
+    *,
+    user: auth_service.User | None = None,
+) -> tuple[str, list[Any]] | None:
+    clause, clause_params = prospect_scope_clause(table_alias, user=user)
+    if clause == "1 = 1":
+        if isinstance(sql_or_clauses, str):
+            return sql_or_clauses, params
+        return None
+    if isinstance(sql_or_clauses, list):
+        sql_or_clauses.append(clause)
+        params.extend(clause_params)
+        return None
+    params.extend(clause_params)
+    return f"({sql_or_clauses}) AND {clause}", params
+
+
+def append_visible_market_scope(
+    clauses: list[str],
+    params: list[Any],
+    selected_market: str = "",
+    *,
+    user: auth_service.User | None = None,
+) -> None:
+    append_market_filter(clauses, params, selected_market)
+    user = user if user is not None else current_dashboard_user()
+    if (
+        selected_market
+        and not dashboard_user_is_admin(user)
+        and (
+            selected_market == UNKNOWN_MARKET_VALUE
+            or not current_user_can_access_market(selected_market, user)
+        )
+    ):
+        clauses.append("1 = 0")
+        return
+    apply_prospect_scope(clauses, params, "prospects", user=user)
+
+
+def record_value(record: dict[str, Any] | sqlite3.Row | None, key: str) -> Any:
+    if record is None:
+        return None
+    if isinstance(record, sqlite3.Row):
+        return record[key] if key in record.keys() else None
+    if isinstance(record, dict):
+        return record.get(key)
+    return None
+
+
+def prospect_state_from_record(record: dict[str, Any] | sqlite3.Row | None) -> str | None:
+    for key in ("market_state", "canonical_state"):
+        state_code = territories.normalize_state(record_value(record, key))
+        if state_code:
+            return state_code
+    market_state = configured_market_state(str(record_value(record, "market") or "").strip())
+    if market_state:
+        return market_state
+    for key in ("state", "state_guess"):
+        state_code = territories.normalize_state(record_value(record, key))
+        if state_code:
+            return state_code
+    return None
+
+
+def current_user_can_access_prospect_record(
+    prospect: dict[str, Any] | sqlite3.Row | None,
+    user: auth_service.User | None = None,
+) -> bool:
+    user = user if user is not None else current_dashboard_user()
+    if dashboard_user_is_admin(user):
+        return prospect is not None
+    return current_user_can_access_state(prospect_state_from_record(prospect), user)
+
+
+def require_prospect_access(prospect_id: int) -> dict[str, Any]:
+    prospect = load_prospect(prospect_id)
+    if prospect is None:
+        abort(404)
+    if not current_user_can_access_prospect_record(prospect):
+        abort_territory_denied()
+    return prospect
+
+
+def require_quote_access(quote_id: int) -> tuple[dict[str, Any], dict[str, Any]]:
+    quote = quote_service.get_quote(get_connection(), quote_id)
+    if quote is None:
+        abort(404)
+    prospect = require_prospect_access(int(quote["prospect_id"]))
+    return quote, prospect
+
+
+def require_queue_access(queue_id: int | str) -> dict[str, Any]:
+    row = get_connection().execute(
+        """
+        SELECT q.*, p.market AS prospect_market, p.market_state AS prospect_market_state,
+               p.state AS prospect_state, p.state_guess AS prospect_state_guess
+        FROM outreach_queue q
+        JOIN prospects p ON p.id = q.prospect_id
+        WHERE q.id = ? OR q.queue_key = ?
+        LIMIT 1
+        """,
+        (queue_id, str(queue_id)),
+    ).fetchone()
+    if row is None:
+        abort(404)
+    queue = _row_to_dict(row)
+    prospect = {
+        "id": queue.get("prospect_id"),
+        "market": queue.get("prospect_market"),
+        "market_state": queue.get("prospect_market_state"),
+        "state": queue.get("prospect_state"),
+        "state_guess": queue.get("prospect_state_guess"),
+    }
+    if not current_user_can_access_prospect_record(prospect):
+        abort_territory_denied()
+    return queue
+
+
+def build_market_options(
+    selected_market: str = "",
+    user: auth_service.User | None = None,
+) -> list[dict[str, Any]]:
+    user = user if user is not None else current_dashboard_user()
+    configured = visible_configured_markets(user)
     options = [
         {
             "value": market["key"],
@@ -499,7 +821,12 @@ def build_market_options(selected_market: str = "") -> list[dict[str, Any]]:
         for market in configured
     ]
     option_values = {option["value"] for option in options}
-    if selected_market and selected_market not in option_values and selected_market != UNKNOWN_MARKET_VALUE:
+    if (
+        selected_market
+        and selected_market not in option_values
+        and selected_market != UNKNOWN_MARKET_VALUE
+        and dashboard_user_is_admin(user)
+    ):
         options.append(
             {
                 "value": selected_market,
@@ -508,7 +835,7 @@ def build_market_options(selected_market: str = "") -> list[dict[str, Any]]:
             }
         )
         option_values.add(selected_market)
-    if has_unconfigured_market_records([market["key"] for market in configured]):
+    if dashboard_user_is_admin(user) and has_unconfigured_market_records(configured_market_keys()):
         options.append(
             {
                 "value": UNKNOWN_MARKET_VALUE,
@@ -517,6 +844,182 @@ def build_market_options(selected_market: str = "") -> list[dict[str, Any]]:
             }
         )
     return options
+
+
+def admin_user_diagnostics() -> list[dict[str, Any]]:
+    users = auth_service.load_auth_users()
+    markets = load_configured_markets()
+    return [
+        {
+            "username": user.username,
+            "display_name": user.display_name,
+            "role": user.role,
+            "allowed_states": dashboard_allowed_states_summary(user),
+            "password_hash_present": user.can_login,
+            "owned_market_count": admin_owned_market_count(user, markets),
+            **admin_user_prospect_counts(user),
+        }
+        for user in users.values()
+    ]
+
+
+def admin_owned_market_count(
+    user: auth_service.User,
+    markets: list[dict[str, Any]],
+) -> int:
+    if auth_service.is_admin(user) or "*" in user.allowed_states:
+        return len(markets)
+    allowed_states = set(territories.normalize_state_list(user.allowed_states))
+    return sum(
+        1
+        for market in markets
+        if not market.get("state_warning")
+        and territories.normalize_state(market.get("state")) in allowed_states
+    )
+
+
+def admin_user_prospect_counts(user: auth_service.User) -> dict[str, int]:
+    clauses = ["1 = 1"]
+    params: list[Any] = []
+    apply_prospect_scope(clauses, params, "prospects", user=user)
+    rows = get_connection().execute(
+        f"""
+        SELECT status, qualification_status, audit_data_status,
+               human_review_status, human_review_decision, next_action,
+               market, market_state, state, state_guess
+        FROM prospects
+        WHERE {" AND ".join(clauses)}
+        """,
+        params,
+    ).fetchall()
+    counts = {
+        "prospect_count": 0,
+        "pending_review_count": 0,
+        "outreach_drafted_count": 0,
+        "outreach_sent_count": 0,
+    }
+    for row in rows:
+        counts["prospect_count"] += 1
+        stage = compute_pipeline_stage(row)
+        if stage == "PENDING_REVIEW":
+            counts["pending_review_count"] += 1
+        elif stage == "OUTREACH_DRAFTED":
+            counts["outreach_drafted_count"] += 1
+        elif stage == "OUTREACH_SENT":
+            counts["outreach_sent_count"] += 1
+    return counts
+
+
+def admin_territory_diagnostics() -> dict[str, Any]:
+    users_config = auth_service.load_user_config()
+    markets = load_configured_markets()
+    owners_by_state = admin_state_owners(users_config)
+    conflict_rows = territories.validate_exclusive_territories(users_config)
+    conflicts_by_state = admin_conflicts_by_state(conflict_rows)
+    markets_by_state, missing_state_markets = admin_markets_by_state(markets)
+    prospect_counts_by_state, unknown_prospect_count = admin_prospect_counts_by_state()
+
+    state_codes = sorted(
+        set(owners_by_state)
+        | set(markets_by_state)
+        | set(prospect_counts_by_state)
+        | set(conflicts_by_state)
+    )
+    territory_rows = [
+        {
+            "state": state_code,
+            "owner_username": ", ".join(owners_by_state.get(state_code, [])),
+            "markets": markets_by_state.get(state_code, []),
+            "prospect_count": prospect_counts_by_state.get(state_code, 0),
+            "conflicts": conflicts_by_state.get(state_code, []),
+        }
+        for state_code in state_codes
+    ]
+    unassigned_states = [
+        row
+        for row in territory_rows
+        if not row["owner_username"] and (row["markets"] or row["prospect_count"])
+    ]
+    return {
+        "territory_rows": territory_rows,
+        "conflicts": conflict_rows,
+        "unassigned_states": unassigned_states,
+        "missing_state_markets": missing_state_markets,
+        "unknown_prospect_count": unknown_prospect_count,
+    }
+
+
+def admin_state_owners(users_config: dict[str, Any]) -> dict[str, list[str]]:
+    owners: dict[str, list[str]] = {}
+    users = users_config.get("users") if isinstance(users_config.get("users"), dict) else {}
+    for username, raw_user in users.items():
+        user = raw_user if isinstance(raw_user, dict) else {}
+        if str(user.get("role") or "").strip().lower() == "admin":
+            continue
+        for state_code in territories.normalize_state_list(user.get("allowed_states")):
+            if state_code == "*":
+                continue
+            owners.setdefault(state_code, []).append(str(username))
+    return owners
+
+
+def admin_conflicts_by_state(conflicts: list[dict[str, Any]]) -> dict[str, list[str]]:
+    by_state: dict[str, list[str]] = {}
+    for conflict in conflicts:
+        state_code = territories.normalize_state(conflict.get("state"))
+        if not state_code:
+            state_code = "Unknown"
+        if conflict.get("type") == "duplicate_state":
+            usernames = ", ".join(str(value) for value in conflict.get("usernames", []))
+            message = f"Duplicate owner assignment: {usernames}"
+        elif conflict.get("type") == "invalid_state":
+            message = (
+                f"Invalid state {conflict.get('state')!r} on "
+                f"{conflict.get('username') or 'unknown user'}"
+            )
+        else:
+            message = str(conflict)
+        by_state.setdefault(state_code, []).append(message)
+    return by_state
+
+
+def admin_markets_by_state(
+    markets: list[dict[str, Any]],
+) -> tuple[dict[str, list[dict[str, str]]], list[dict[str, str]]]:
+    markets_by_state: dict[str, list[dict[str, str]]] = {}
+    missing_state_markets: list[dict[str, str]] = []
+    for market in markets:
+        market_info = {
+            "key": str(market.get("key") or ""),
+            "label": str(market.get("label") or market.get("key") or ""),
+        }
+        state_code = territories.normalize_state(market.get("state"))
+        if state_code:
+            markets_by_state.setdefault(state_code, []).append(market_info)
+        else:
+            missing_state_markets.append(market_info)
+    for state_markets in markets_by_state.values():
+        state_markets.sort(key=lambda item: (item["label"].lower(), item["key"].lower()))
+    missing_state_markets.sort(key=lambda item: (item["label"].lower(), item["key"].lower()))
+    return markets_by_state, missing_state_markets
+
+
+def admin_prospect_counts_by_state() -> tuple[dict[str, int], int]:
+    rows = get_connection().execute(
+        """
+        SELECT market, market_state, state, state_guess
+        FROM prospects
+        """
+    ).fetchall()
+    counts: dict[str, int] = {}
+    unknown_count = 0
+    for row in rows:
+        state_code = prospect_state_from_record(row)
+        if state_code:
+            counts[state_code] = counts.get(state_code, 0) + 1
+        else:
+            unknown_count += 1
+    return counts, unknown_count
 
 
 def has_unconfigured_market_records(configured_keys: list[str]) -> bool:
@@ -798,10 +1301,11 @@ def restore_trashed_prospect(connection: sqlite3.Connection, prospect: dict[str,
     )
 
 
-def purge_due_trash_media(connection: sqlite3.Connection) -> dict[str, int]:
+def purge_due_trash_media(connection: sqlite3.Connection, *, market: str = "") -> dict[str, int]:
     clauses: list[str] = []
     params: list[Any] = []
     append_trash_prospect_filter(clauses, params)
+    append_visible_market_scope(clauses, params, market)
     rows = [
         _row_to_dict(row)
         for row in connection.execute(
@@ -920,15 +1424,17 @@ def add_market_from_form(form: Any) -> str:
         raise ValueError("markets.yaml must contain a mapping named markets.")
 
     label = str(form.get("label") or "").strip()
-    state = str(form.get("state") or "").strip().upper()
+    state = territories.normalize_state(form.get("state"))
     market_key = str(form.get("market_key") or "").strip()
     cities = parse_market_cities(form.get("included_cities"))
     notes = str(form.get("notes") or "").strip()
 
     if not label:
         raise ValueError("Label is required.")
-    if not re.fullmatch(r"[A-Z]{2}", state):
-        raise ValueError("State must be a two-letter abbreviation.")
+    if state is None:
+        raise ValueError("State must be a valid two-letter abbreviation.")
+    if not current_user_can_access_state(state):
+        raise ValueError(territory_denial_message())
     if not market_key:
         market_key = generate_market_key(label, state)
     if not MARKET_KEY_PATTERN.fullmatch(market_key):
@@ -1002,6 +1508,8 @@ def ensure_outreach_queue_schema(db_path: str | Path) -> None:
                 campaign TEXT NOT NULL,
                 step INTEGER NOT NULL,
                 status TEXT NOT NULL DEFAULT 'queued',
+                owner_username TEXT,
+                market_state TEXT,
                 send_after TEXT,
                 subject TEXT,
                 draft_artifact_id INTEGER,
@@ -1317,42 +1825,49 @@ def unique_text_values(values: list[str]) -> list[str]:
     return result
 
 
-def dashboard_auth_enabled() -> bool:
-    configured = any(
-        str(os.environ.get(key) or "").strip()
-        for key in ("DASHBOARD_USERNAME", "DASHBOARD_PASSWORD", "DASHBOARD_PASSWORD_HASH")
-    )
-    explicit = str(os.environ.get("DASHBOARD_AUTH_ENABLED") or "").strip().lower()
-    if explicit in {"1", "true", "yes", "y", "on"}:
+def production_requires_app_secret() -> bool:
+    """Return True for hosted/production environments where a real secret is required."""
+
+    if any(os.environ.get(key) for key in ("RAILWAY_ENVIRONMENT", "RAILWAY_PROJECT_ID", "RAILWAY_SERVICE_ID")):
         return True
-    if explicit in {"0", "false", "no", "n", "off"}:
-        return False
-    return configured
+    return any(
+        str(os.environ.get(key) or "").strip().lower() == "production"
+        for key in ("APP_ENV", "ENV", "FLASK_ENV")
+    )
+
+
+def load_app_secret_key() -> str:
+    secret_key = str(os.environ.get("APP_SECRET_KEY") or "").strip()
+    if secret_key:
+        return secret_key
+
+    if production_requires_app_secret():
+        raise RuntimeError("APP_SECRET_KEY must be set in production/Railway environments.")
+
+    logger.warning(
+        "APP_SECRET_KEY is not set; generated a temporary local development secret. "
+        "Set APP_SECRET_KEY for stable sessions."
+    )
+    return secrets.token_urlsafe(48)
+
+
+def dashboard_auth_enabled() -> bool:
+    return True
 
 
 def dashboard_auth_configured() -> bool:
-    return bool(
-        str(os.environ.get("DASHBOARD_USERNAME") or "").strip()
-        and (
-            str(os.environ.get("DASHBOARD_PASSWORD_HASH") or "").strip()
-            or str(os.environ.get("DASHBOARD_PASSWORD") or "").strip()
-        )
-    )
+    try:
+        return bool(auth_service.load_user_config().get("users"))
+    except (FileNotFoundError, ValueError):
+        return False
 
 
-def dashboard_username() -> str:
-    return str(os.environ.get("DASHBOARD_USERNAME") or "").strip()
-
-
-def dashboard_password_matches(password: str) -> bool:
-    password_hash = str(os.environ.get("DASHBOARD_PASSWORD_HASH") or "").strip()
-    if password_hash:
-        try:
-            return check_password_hash(password_hash, password)
-        except ValueError:
-            return False
-    plain_password = str(os.environ.get("DASHBOARD_PASSWORD") or "")
-    return bool(plain_password) and secrets.compare_digest(password, plain_password)
+def dashboard_allowed_states_summary(user: auth_service.User | None) -> str:
+    if user is None:
+        return ""
+    if auth_service.is_admin(user) or "*" in user.allowed_states:
+        return "ALL STATES"
+    return ", ".join(user.allowed_states)
 
 
 def dashboard_db_import_enabled() -> bool:
@@ -1520,22 +2035,36 @@ def import_media_archive(uploaded_file: Any) -> dict[str, Any]:
 
 
 def create_app(db_path: str | Path | None = None) -> Flask:
+    load_env()
     app = Flask(
         __name__,
         template_folder=str(PROJECT_ROOT / "templates"),
         static_folder=str(PROJECT_ROOT / "static"),
     )
-    app.config["SECRET_KEY"] = (
-        os.environ.get("FLASK_SECRET_KEY")
-        or os.environ.get("SECRET_KEY")
-        or "local-dashboard-dev-secret"
-    )
+    app.config["SECRET_KEY"] = load_app_secret_key()
+    app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=12)
+    app.config["SESSION_COOKIE_HTTPONLY"] = True
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.config["DASHBOARD_AUTH_ENABLED"] = dashboard_auth_enabled()
     app.config["DASHBOARD_DB_IMPORT_ENABLED"] = dashboard_db_import_enabled()
     app.config["DASHBOARD_MEDIA_IMPORT_ENABLED"] = dashboard_media_import_enabled()
     app.config["DATABASE_PATH"] = str(resolve_project_path(db_path or get_database_path()))
+
+    login_manager = LoginManager()
+    login_manager.login_view = "login"
+    login_manager.init_app(app)
+
+    @login_manager.user_loader
+    def load_login_user(user_id: str) -> auth_service.User | None:
+        return auth_service.load_user(user_id)
+
+    @login_manager.unauthorized_handler
+    def redirect_to_login():
+        return redirect(url_for("login", next=request.full_path if request.query_string else request.path))
+
     dashboard_jobs.ensure_schema(app.config["DATABASE_PATH"])
     ensure_outreach_queue_schema(app.config["DATABASE_PATH"])
+    pipeline_db.ensure_quote_schema_for_path(app.config["DATABASE_PATH"])
     dashboard_jobs.mark_stale_jobs(app.config["DATABASE_PATH"])
 
     @app.teardown_appcontext
@@ -1559,48 +2088,51 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             return f"https://{href}"
         return href
 
+    @app.template_filter("money")
+    def money(value: Any) -> str:
+        return quote_service.format_money(value)
+
     @app.context_processor
     def auth_template_context() -> dict[str, Any]:
+        dashboard_current_user = auth_service.current_app_user()
         return {
             "dashboard_auth_enabled": app.config["DASHBOARD_AUTH_ENABLED"],
-            "dashboard_user": session.get("dashboard_username", ""),
+            "dashboard_current_user": dashboard_current_user,
+            "dashboard_user": dashboard_current_user.username if dashboard_current_user else "",
+            "dashboard_role": dashboard_current_user.role if dashboard_current_user else "",
+            "dashboard_allowed_states_summary": dashboard_allowed_states_summary(dashboard_current_user),
         }
 
     @app.before_request
     def require_dashboard_login():
-        if not app.config["DASHBOARD_AUTH_ENABLED"]:
-            return None
         if request.endpoint in PUBLIC_AUTH_ENDPOINTS:
             return None
-        if session.get("dashboard_authenticated"):
+        if bool(getattr(flask_current_user, "is_authenticated", False)):
             return None
         return redirect(url_for("login", next=request.full_path if request.query_string else request.path))
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
-        if not app.config["DASHBOARD_AUTH_ENABLED"]:
-            return redirect(url_for("overview"))
-        if not dashboard_auth_configured():
-            return (
-                render_template(
-                    "dashboard/login.html",
-                    active_page="login",
-                    error="Dashboard login is enabled, but username/password env vars are missing.",
-                    next_url=url_for("overview"),
-                ),
-                503,
-            )
         next_url = safe_next_path(request.values.get("next"))
+        if bool(getattr(flask_current_user, "is_authenticated", False)):
+            return redirect(next_url)
+
         error = ""
         if request.method == "POST":
             username = str(request.form.get("username") or "").strip()
             password = str(request.form.get("password") or "")
-            if secrets.compare_digest(username, dashboard_username()) and dashboard_password_matches(password):
-                session.clear()
-                session["dashboard_authenticated"] = True
-                session["dashboard_username"] = username
-                return redirect(next_url)
-            error = "Login failed. Check the username and password."
+            if auth_service.verify_password(username, password):
+                user = auth_service.get_user(username)
+                if user is not None:
+                    session.clear()
+                    session.permanent = True
+                    flask_login_user(user)
+                    session["user_id"] = user.username
+                    session["role"] = user.role
+                    session["states"] = list(user.allowed_states)
+                    session["authenticated_at"] = utc_now()
+                    return redirect(next_url)
+            error = "Invalid username or password."
         return render_template(
             "dashboard/login.html",
             active_page="login",
@@ -1608,8 +2140,10 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             next_url=next_url,
         )
 
-    @app.post("/logout")
+    @app.route("/logout", methods=["GET", "POST"])
+    @login_required
     def logout():
+        flask_logout_user()
         session.clear()
         return redirect(url_for("login"))
 
@@ -1631,6 +2165,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         return send_file(resolved)
 
     @app.get("/admin/database")
+    @login_required
+    @auth_service.admin_required
     def database_admin() -> str:
         return render_template(
             "dashboard/database_admin.html",
@@ -1642,6 +2178,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         )
 
     @app.post("/admin/database/import")
+    @login_required
+    @auth_service.admin_required
     def database_import():
         if not app.config["DASHBOARD_DB_IMPORT_ENABLED"]:
             abort(403)
@@ -1685,6 +2223,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         )
 
     @app.get("/admin/media")
+    @login_required
+    @auth_service.admin_required
     def media_admin() -> str:
         return render_template(
             "dashboard/media_admin.html",
@@ -1695,6 +2235,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         )
 
     @app.post("/admin/media/import")
+    @login_required
+    @auth_service.admin_required
     def media_import():
         if not app.config["DASHBOARD_MEDIA_IMPORT_ENABLED"]:
             abort(403)
@@ -1733,18 +2275,48 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             error="",
         )
 
+    @app.get("/admin/users")
+    @login_required
+    @auth_service.admin_required
+    def admin_users() -> str:
+        return render_template(
+            "dashboard/admin_users.html",
+            active_page="admin",
+            users=admin_user_diagnostics(),
+        )
+
+    @app.get("/admin/territories")
+    @login_required
+    @auth_service.admin_required
+    def admin_territories() -> str:
+        diagnostics = admin_territory_diagnostics()
+        return render_template(
+            "dashboard/admin_territories.html",
+            active_page="admin",
+            **diagnostics,
+        )
+
     @app.get("/")
     def overview() -> str:
-        selected_market = selected_market_from_request()
+        selected_market, territory_error = normalize_selected_market_for_user(
+            selected_market_from_request(),
+            allow_unknown_for_admin=True,
+        )
         stage_counts = load_stage_counts(selected_market)
         total_prospects = sum(item["count"] for item in stage_counts)
         top_markets = load_group_counts("market", market=selected_market)
         top_niches = load_group_counts("niche", market=selected_market)
+        message = (
+            {"status": "error", "message": territory_error}
+            if territory_error
+            else job_message_from_code(request.args.get("result"))
+        )
         return render_template(
             "dashboard/overview.html",
             active_page="overview",
             db_path=app.config["DATABASE_PATH"],
             market_filter=market_filter_context(selected_market),
+            message=message,
             stage_counts=stage_counts,
             total_prospects=total_prospects,
             top_markets=top_markets,
@@ -1767,9 +2339,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.post("/review/<int:prospect_id>/delete")
     def quick_delete_review_card(prospect_id: int):
-        prospect = load_prospect(prospect_id)
-        if prospect is None:
-            abort(404)
+        prospect = require_prospect_access(prospect_id)
         selected_market = request.form.get("market", "").strip()
         existing_notes = str(prospect.get("human_review_notes") or "").strip()
         quick_note = "Quick deleted from review queue after thumbnail scan."
@@ -1823,9 +2393,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.post("/trash/<int:prospect_id>/restore")
     def restore_trash(prospect_id: int):
-        prospect = load_prospect(prospect_id)
-        if prospect is None:
-            abort(404)
+        prospect = require_prospect_access(prospect_id)
         selected_market = request.form.get("market", "").strip()
         connection = get_connection()
         restore_trashed_prospect(connection, prospect)
@@ -1838,7 +2406,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     def purge_trash_media():
         selected_market = request.form.get("market", "").strip()
         connection = get_connection()
-        result = purge_due_trash_media(connection)
+        result = purge_due_trash_media(connection, market=selected_market)
         connection.commit()
         code = f"purged:{result['prospects_purged']}:{result['files_deleted']}"
         if selected_market:
@@ -1907,6 +2475,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         )
 
     @app.post("/send/test")
+    @login_required
+    @auth_service.admin_required
     def send_test_email():
         if request.form.get("confirm_test") != "1":
             return redirect(url_for("send_page", result="error:Confirm the test send first."))
@@ -1944,6 +2514,292 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         code = f"batch:{result['sent']}:{result['failed']}:{result['skipped']}"
         return redirect(url_for("send_page", result=code))
 
+    @app.get("/quotes")
+    def quotes_list() -> str:
+        return render_template(
+            "dashboard/quotes_list.html",
+            active_page="quotes",
+            quotes=list_quotes_for_current_user(),
+            message=quote_message_from_code(request.args.get("result")),
+        )
+
+    @app.get("/quotes/new")
+    def new_quote() -> str:
+        try:
+            prospect_id = parse_optional_int(request.args.get("prospect_id"))
+        except ValueError:
+            abort(400)
+        if prospect_id is None:
+            abort(400)
+        prospect = require_prospect_access(prospect_id)
+        contacts = load_contacts(prospect_id)
+        return render_template(
+            "dashboard/quote_builder.html",
+            active_page="quotes",
+            mode="new",
+            quote=None,
+            prospect=prospect,
+            primary_contact=primary_contact_from_contacts(contacts),
+            catalog=quote_catalog_view(),
+            form_state=quote_form_state(prospect, primary_contact_from_contacts(contacts)),
+            form_action=url_for("create_quote"),
+            error="",
+        )
+
+    @app.post("/quotes/new")
+    def create_quote():
+        try:
+            prospect_id = parse_optional_int(request.form.get("prospect_id"))
+        except ValueError:
+            abort(400)
+        if prospect_id is None:
+            abort(400)
+        prospect = require_prospect_access(prospect_id)
+        contacts = load_contacts(prospect_id)
+        primary_contact = primary_contact_from_contacts(contacts)
+        catalog = quote_service.load_quote_catalog()
+        try:
+            payload = parse_quote_builder_form(request.form, prospect=prospect, catalog=catalog)
+            connection = get_connection()
+            quote = quote_service.create_quote_for_prospect(
+                connection,
+                prospect_id,
+                payload["package_key"],
+            )
+            quote_service.update_quote_header(connection, int(quote["id"]), **payload["header"])
+            quote_service.replace_quote_line_items(connection, int(quote["id"]), payload["line_items"])
+            sync_quote_territory_fields(connection, int(quote["id"]), prospect)
+            connection.commit()
+        except ValueError as exc:
+            if "connection" in locals():
+                connection.rollback()
+            return (
+                render_template(
+                    "dashboard/quote_builder.html",
+                    active_page="quotes",
+                    mode="new",
+                    quote=None,
+                    prospect=prospect,
+                    primary_contact=primary_contact,
+                    catalog=quote_catalog_view(catalog),
+                    form_state=quote_form_state(prospect, primary_contact, form=request.form),
+                    form_action=url_for("create_quote"),
+                    error=str(exc),
+                ),
+                400,
+            )
+        return redirect(url_for("quote_detail", quote_id=quote["id"]))
+
+    @app.get("/quotes/<int:quote_id>")
+    def quote_detail(quote_id: int) -> str:
+        quote, prospect = require_quote_access(quote_id)
+        return render_template(
+            "dashboard/quote_detail.html",
+            active_page="quotes",
+            quote=quote,
+            prospect=prospect,
+            message=quote_message_from_code(request.args.get("result")),
+        )
+
+    @app.get("/quotes/<int:quote_id>/edit")
+    def edit_quote(quote_id: int) -> str:
+        quote, prospect = require_quote_access(quote_id)
+        contacts = load_contacts(int(prospect["id"]))
+        primary_contact = primary_contact_from_contacts(contacts)
+        return render_template(
+            "dashboard/quote_builder.html",
+            active_page="quotes",
+            mode="edit",
+            quote=quote,
+            prospect=prospect,
+            primary_contact=primary_contact,
+            catalog=quote_catalog_view(),
+            form_state=quote_form_state(prospect, primary_contact, quote=quote),
+            form_action=url_for("update_quote", quote_id=quote_id),
+            error="",
+        )
+
+    @app.post("/quotes/<int:quote_id>/edit")
+    def update_quote(quote_id: int):
+        connection = get_connection()
+        quote, prospect = require_quote_access(quote_id)
+        contacts = load_contacts(int(prospect["id"]))
+        primary_contact = primary_contact_from_contacts(contacts)
+        catalog = quote_service.load_quote_catalog()
+        try:
+            payload = parse_quote_builder_form(request.form, prospect=prospect, catalog=catalog)
+            quote_service.update_quote_header(connection, quote_id, **payload["header"])
+            quote_service.replace_quote_line_items(connection, quote_id, payload["line_items"])
+            quote_service.log_quote_event(
+                connection,
+                quote_id,
+                int(prospect["id"]),
+                "quote_updated",
+                metadata={"package_key": payload["package_key"]},
+            )
+            connection.commit()
+        except ValueError as exc:
+            connection.rollback()
+            return (
+                render_template(
+                    "dashboard/quote_builder.html",
+                    active_page="quotes",
+                    mode="edit",
+                    quote=quote,
+                    prospect=prospect,
+                    primary_contact=primary_contact,
+                    catalog=quote_catalog_view(catalog),
+                    form_state=quote_form_state(prospect, primary_contact, quote=quote, form=request.form),
+                    form_action=url_for("update_quote", quote_id=quote_id),
+                    error=str(exc),
+                ),
+                400,
+            )
+        return redirect(url_for("quote_detail", quote_id=quote_id, result="saved"))
+
+    @app.get("/quotes/<int:quote_id>/export/text")
+    def quote_export_text(quote_id: int):
+        connection = get_connection()
+        quote, prospect = require_quote_access(quote_id)
+        text = quote_exports.render_email_text(quote, prospect)
+        export_file = quote_exports.write_text_export(connection, quote, text)
+        quote_exports.log_export_event(
+            connection,
+            quote,
+            event_type="quote_exported_text",
+            export_file=export_file,
+        )
+        connection.commit()
+        return current_app.response_class(text, content_type="text/plain; charset=utf-8")
+
+    @app.get("/quotes/<int:quote_id>/export.txt")
+    def quote_export_text_legacy(quote_id: int):
+        return redirect(url_for("quote_export_text", quote_id=quote_id))
+
+    @app.get("/quotes/<int:quote_id>/export/html")
+    def quote_export_html(quote_id: int):
+        connection = get_connection()
+        quote, prospect = require_quote_access(quote_id)
+        context = quote_exports.build_export_context(quote, prospect)
+        html = render_template("dashboard/quote_printable.html", **context)
+        export_file = quote_exports.write_html_export(connection, quote, html)
+        quote_exports.log_export_event(
+            connection,
+            quote,
+            event_type="quote_exported_html",
+            export_file=export_file,
+        )
+        connection.commit()
+        return current_app.response_class(html, content_type="text/html; charset=utf-8")
+
+    @app.get("/quotes/<int:quote_id>/print")
+    def quote_printable(quote_id: int):
+        return redirect(url_for("quote_export_html", quote_id=quote_id))
+
+    @app.post("/quotes/<int:quote_id>/status")
+    def update_quote_status(quote_id: int):
+        require_quote_access(quote_id)
+        status = str(request.form.get("status") or "").strip().lower()
+        if status not in {"sent", "accepted", "declined"}:
+            abort(400)
+        note = str(request.form.get("note") or "").strip() or None
+        try:
+            handle_quote_lifecycle_action(
+                get_connection(),
+                quote_id,
+                status,
+                note=note,
+                close_lost=request.form.get("confirm_close_lost") == "1",
+            )
+        except ValueError:
+            abort(404)
+        return redirect(url_for("quote_detail", quote_id=quote_id, result=f"status:{status}"))
+
+    @app.post("/quotes/<int:quote_id>/mark-sent")
+    def mark_quote_sent(quote_id: int):
+        require_quote_access(quote_id)
+        try:
+            handle_quote_lifecycle_action(
+                get_connection(),
+                quote_id,
+                "sent",
+                note=str(request.form.get("note") or "").strip() or None,
+            )
+        except ValueError:
+            abort(404)
+        return redirect(url_for("quote_detail", quote_id=quote_id, result="status:sent"))
+
+    @app.post("/quotes/<int:quote_id>/mark-accepted")
+    def mark_quote_accepted(quote_id: int):
+        require_quote_access(quote_id)
+        try:
+            handle_quote_lifecycle_action(
+                get_connection(),
+                quote_id,
+                "accepted",
+                note=str(request.form.get("note") or "").strip() or None,
+            )
+        except ValueError:
+            abort(404)
+        return redirect(url_for("quote_detail", quote_id=quote_id, result="status:accepted"))
+
+    @app.post("/quotes/<int:quote_id>/mark-declined")
+    def mark_quote_declined(quote_id: int):
+        require_quote_access(quote_id)
+        try:
+            handle_quote_lifecycle_action(
+                get_connection(),
+                quote_id,
+                "declined",
+                note=str(request.form.get("note") or "").strip() or None,
+                close_lost=request.form.get("confirm_close_lost") == "1",
+            )
+        except ValueError:
+            abort(404)
+        result = "status:declined_closed_lost" if request.form.get("confirm_close_lost") == "1" else "status:declined"
+        return redirect(url_for("quote_detail", quote_id=quote_id, result=result))
+
+    @app.post("/quotes/<int:quote_id>/create-revision")
+    @app.post("/quotes/<int:quote_id>/revision")
+    def create_quote_revision(quote_id: int):
+        connection = get_connection()
+        require_quote_access(quote_id)
+        try:
+            quote = quote_service.create_quote_revision(connection, quote_id)
+            prospect = require_prospect_access(int(quote["prospect_id"]))
+            sync_quote_territory_fields(connection, int(quote["id"]), prospect)
+            insert_quote_lifecycle_outreach_event(
+                connection,
+                quote=quote,
+                lifecycle_event="quote_revision_created",
+            )
+            connection.commit()
+        except ValueError:
+            connection.rollback()
+            abort(404)
+        return redirect(url_for("quote_detail", quote_id=quote["id"], result="revision_created"))
+
+    @app.post("/quotes/<int:quote_id>/delete")
+    def delete_quote(quote_id: int):
+        if request.form.get("confirm_delete") != "1":
+            abort(400)
+        connection = get_connection()
+        require_quote_access(quote_id)
+        try:
+            quote = quote_service.delete_quote(
+                connection,
+                quote_id,
+                note=str(request.form.get("note") or "").strip() or None,
+            )
+            connection.commit()
+        except ValueError:
+            connection.rollback()
+            abort(404)
+        return_to = str(request.form.get("return_to") or "").strip().lower()
+        if return_to == "case":
+            return redirect(url_for("case_file", prospect_id=int(quote["prospect_id"]), quote_result="deleted"))
+        return redirect(url_for("quotes_list", result="deleted"))
+
     @app.get("/crm/stage/<stage>")
     def crm_stage(stage: str) -> str:
         normalized_stage = _normalize_token(stage)
@@ -1967,9 +2823,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.get("/sales-packet/<int:prospect_id>")
     def sales_packet(prospect_id: int) -> str:
-        prospect = load_prospect(prospect_id)
-        if prospect is None:
-            abort(404)
+        prospect = require_prospect_access(prospect_id)
         if not sales_packet_available(prospect):
             abort(404)
 
@@ -1994,9 +2848,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.post("/sales-packet/<int:prospect_id>/notes")
     def save_sales_packet_notes(prospect_id: int):
-        prospect = load_prospect(prospect_id)
-        if prospect is None:
-            abort(404)
+        prospect = require_prospect_access(prospect_id)
         if not sales_packet_available(prospect):
             abort(404)
         notes = str(request.form.get("sales_notes") or "").strip()
@@ -2014,9 +2866,17 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.get("/run")
     def run_controls() -> str:
-        selected_market = selected_market_from_request()
+        selected_market, territory_error = normalize_selected_market_for_user(
+            selected_market_from_request(),
+            allow_unknown_for_admin=True,
+        )
         selected_niches = selected_niches_from_request()
         market_options = build_market_options(selected_market)
+        message = (
+            {"status": "error", "message": territory_error}
+            if territory_error
+            else job_message_from_code(request.args.get("result"))
+        )
         return render_template(
             "dashboard/run.html",
             active_page="run",
@@ -2031,8 +2891,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
                 selected_market,
                 selected_niches,
             ),
-            recent_jobs=dashboard_jobs.list_jobs(limit=10, db_path=app.config["DATABASE_PATH"]),
-            message=job_message_from_code(request.args.get("result")),
+            recent_jobs=list_dashboard_jobs_for_current_user(limit=10),
+            message=message,
             places_limit_default=50,
             places_limit_max=PLACES_JOB_LIMIT,
             audit_limit_default=20,
@@ -2051,27 +2911,38 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.get("/jobs")
     def jobs() -> str:
-        selected_market = selected_market_from_request()
+        selected_market, territory_error = normalize_selected_market_for_user(
+            selected_market_from_request(),
+            allow_unknown_for_admin=True,
+        )
         market_options = build_market_options(selected_market)
+        message = (
+            {"status": "error", "message": territory_error}
+            if territory_error
+            else job_message_from_code(request.args.get("result"))
+        )
         return render_template(
             "dashboard/jobs.html",
             active_page="jobs",
-            jobs=dashboard_jobs.list_jobs(db_path=app.config["DATABASE_PATH"]),
+            jobs=list_dashboard_jobs_for_current_user(),
             job_types={
                 key: job
                 for key, job in dashboard_jobs.ALLOWED_JOBS.items()
                 if key != "full_pipeline"
+                and (dashboard_user_is_admin() or key != "reconcile_statuses")
             },
             market_filter=market_filter_context(selected_market),
             job_market_options=[option for option in market_options if option.get("can_run")],
             niche_options=load_distinct_values("niche"),
-            message=job_message_from_code(request.args.get("result")),
+            message=message,
         )
 
     @app.get("/jobs/<job_key>")
     def job_detail(job_key: str) -> str:
         job = dashboard_jobs.get_job(job_key, db_path=app.config["DATABASE_PATH"])
         if job is None:
+            abort(404)
+        if not current_user_can_access_job(job):
             abort(404)
         return render_template(
             "dashboard/job_detail.html",
@@ -2101,6 +2972,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     def job_status(job_key: str):
         job = dashboard_jobs.get_job(job_key, db_path=app.config["DATABASE_PATH"])
         if job is None:
+            abort(404)
+        if not current_user_can_access_job(job):
             abort(404)
         return jsonify(
             {
@@ -2162,9 +3035,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.get("/case/<int:prospect_id>")
     def case_file(prospect_id: int) -> str:
-        prospect = load_prospect(prospect_id)
-        if prospect is None:
-            abort(404)
+        prospect = require_prospect_access(prospect_id)
         artifacts = load_artifacts(prospect_id)
         audits = load_audits(prospect_id)
         contacts = load_contacts(prospect_id)
@@ -2192,6 +3063,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         visual_findings = visual_review.get("findings") if visual_review else {}
         visual_issue_map = visual_findings.get("issues") or {}
         top_visual_issues = visual_findings.get("top_issues") or []
+        quote_rows = quote_service.list_quotes_for_prospect(get_connection(), prospect_id)
         return render_template(
             "dashboard/case.html",
             active_page="leads",
@@ -2220,14 +3092,15 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             visual_issue_categories=VISUAL_REVIEW_CATEGORIES,
             visual_issue_map=visual_issue_map,
             top_visual_issues=top_visual_issues,
+            quotes=quote_rows,
+            latest_quote=quote_rows[0] if quote_rows else None,
             review_message=review_message_from_code(request.args.get("review")),
+            quote_message=quote_message_from_code(request.args.get("quote_result")),
         )
 
     @app.post("/case/<int:prospect_id>/review")
     def record_case_review(prospect_id: int):
-        prospect = load_prospect(prospect_id)
-        if prospect is None:
-            abort(404)
+        prospect = require_prospect_access(prospect_id)
 
         action = request.form.get("action", "").strip().lower()
         if action not in {"approve", "reject", "hold"}:
@@ -2273,9 +3146,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.post("/case/<int:prospect_id>/stage")
     def update_case_stage(prospect_id: int):
-        prospect = load_prospect(prospect_id)
-        if prospect is None:
-            abort(404)
+        prospect = require_prospect_access(prospect_id)
         new_status = _normalize_token(request.form.get("new_status"))
         if new_status not in CRM_STAGE_LABELS:
             abort(400)
@@ -2296,9 +3167,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.post("/case/<int:prospect_id>/contact")
     def save_case_contact(prospect_id: int):
-        prospect = load_prospect(prospect_id)
-        if prospect is None:
-            abort(404)
+        prospect = require_prospect_access(prospect_id)
         try:
             contact_id = parse_optional_int(request.form.get("contact_id"))
         except ValueError:
@@ -2320,9 +3189,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.post("/case/<int:prospect_id>/visual-review")
     def record_visual_review(prospect_id: int):
-        prospect = load_prospect(prospect_id)
-        if prospect is None:
-            abort(404)
+        prospect = require_prospect_access(prospect_id)
 
         try:
             score, findings, summary = parse_visual_review_form(request.form)
@@ -2342,9 +3209,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.post("/case/<int:prospect_id>/outreach-drafts")
     def generate_case_outreach_drafts(prospect_id: int):
-        prospect = load_prospect(prospect_id)
-        if prospect is None:
-            abort(404)
+        require_prospect_access(prospect_id)
         force = request.form.get("force") == "1"
         try:
             style = parse_outreach_copy_style(request.form.get("style"))
@@ -2373,9 +3238,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.post("/case/<int:prospect_id>/drafts/regenerate")
     def regenerate_case_outreach_drafts(prospect_id: int):
-        prospect = load_prospect(prospect_id)
-        if prospect is None:
-            abort(404)
+        require_prospect_access(prospect_id)
         try:
             style = parse_outreach_copy_style(request.form.get("style"))
             variant_index = parse_variant_index(request.form.get("variant_index"))
@@ -2404,9 +3267,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.post("/case/<int:prospect_id>/draft/<int:step>/save")
     def save_case_outreach_draft(prospect_id: int, step: int):
-        prospect = load_prospect(prospect_id)
-        if prospect is None:
-            abort(404)
+        prospect = require_prospect_access(prospect_id)
         if step not in OUTREACH_DRAFT_STEPS:
             abort(404)
 
@@ -2440,6 +3301,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         resolved = resolve_media_path(relative_path)
         if resolved is None or not resolved.is_file():
             abort(404)
+        require_artifact_path_access(relative_path)
         return send_file(resolved)
 
     @app.get("/files/<path:file_path>")
@@ -2453,6 +3315,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             abort(404)
         if not resolved.is_file():
             abort(404)
+        require_project_file_access(file_path)
         return send_file(resolved)
 
     @app.get("/health")
@@ -2466,7 +3329,7 @@ def load_stage_counts(market: str = "") -> list[dict[str, Any]]:
     counts = {stage: 0 for stage in PIPELINE_STAGE_BUCKETS}
     clauses = ["1 = 1"]
     params: list[Any] = []
-    append_market_filter(clauses, params, market)
+    append_visible_market_scope(clauses, params, market)
     append_active_prospect_filter(clauses, params)
     rows = get_connection().execute(
         f"""
@@ -2501,13 +3364,14 @@ def load_pipeline_counts(market: str = "") -> list[dict[str, Any]]:
         ),
     }
     counts = []
-    market_clause, market_params = market_where_clause(market)
+    market_clauses: list[str] = []
+    market_params: list[Any] = []
+    append_visible_market_scope(market_clauses, market_params, market)
     for bucket in PIPELINE_COUNT_BUCKETS:
         clauses = [f"({count_queries[bucket]})"]
         params: list[Any] = []
-        if market_clause != "1 = 1":
-            clauses.append(market_clause)
-            params.extend(market_params)
+        clauses.extend(market_clauses)
+        params.extend(market_params)
         append_active_prospect_filter(clauses, params)
         row = connection.execute(
             f"SELECT COUNT(*) AS count FROM prospects WHERE {' AND '.join(clauses)}",
@@ -2534,7 +3398,7 @@ def load_run_counts(market: str = "") -> list[dict[str, Any]]:
     counts = {key: 0 for key, _label in keys}
     clauses = ["1 = 1"]
     params: list[Any] = []
-    append_market_filter(clauses, params, market)
+    append_visible_market_scope(clauses, params, market)
     append_active_prospect_filter(clauses, params)
     rows = get_connection().execute(
         f"""
@@ -2589,7 +3453,7 @@ def load_run_recommended_action(market: str = "", niches: list[str] | None = Non
     niches = [str(niche).strip() for niche in (niches or []) if str(niche).strip()]
     base_clauses = ["1 = 1"]
     base_params: list[Any] = []
-    append_market_filter(base_clauses, base_params, market)
+    append_visible_market_scope(base_clauses, base_params, market)
     if niches:
         placeholders = ", ".join("?" for _ in niches)
         base_clauses.append(f"niche IN ({placeholders})")
@@ -2690,7 +3554,7 @@ def load_review_queue(market: str = "") -> list[dict[str, Any]]:
         "next_action = 'HUMAN_REVIEW'",
     ]
     params: list[Any] = []
-    append_market_filter(clauses, params, market)
+    append_visible_market_scope(clauses, params, market)
     append_active_prospect_filter(clauses, params)
     rows = get_connection().execute(
         f"""
@@ -2719,7 +3583,7 @@ def load_group_counts(column: str, limit: int = 8, market: str = "") -> list[dic
         raise ValueError(f"Unsupported group count column: {column}")
     clauses = [f"{column} IS NOT NULL", f"{column} <> ''"]
     params: list[Any] = []
-    append_market_filter(clauses, params, market)
+    append_visible_market_scope(clauses, params, market)
     append_active_prospect_filter(clauses, params)
     params.append(limit)
     rows = get_connection().execute(
@@ -2742,7 +3606,9 @@ def load_distinct_values(column: str, market: str = "") -> list[str]:
     clauses = [f"{column} IS NOT NULL", f"{column} <> ''"]
     params: list[Any] = []
     if column != "market":
-        append_market_filter(clauses, params, market)
+        append_visible_market_scope(clauses, params, market)
+    else:
+        append_visible_market_scope(clauses, params, "")
     append_active_prospect_filter(clauses, params)
     rows = get_connection().execute(
         f"""
@@ -2809,7 +3675,7 @@ def load_market_summary_counts(market: str = "") -> dict[str, dict[str, int]]:
     configured_keys_set = set(configured_market_keys())
     clauses = ["1 = 1"]
     params: list[Any] = []
-    append_market_filter(clauses, params, market)
+    append_visible_market_scope(clauses, params, market)
     append_active_prospect_filter(clauses, params)
     rows = get_connection().execute(
         f"""
@@ -2833,7 +3699,7 @@ def load_market_summary_counts(market: str = "") -> dict[str, dict[str, int]]:
 
 
 def load_market_summary_rows(market: str = "") -> list[dict[str, Any]]:
-    configured = load_configured_markets()
+    configured = visible_configured_markets()
     summary_counts = load_market_summary_counts(market)
     rows: list[dict[str, Any]] = []
 
@@ -2882,6 +3748,7 @@ def load_stage_counts_by_market() -> dict[str, dict[str, Any]]:
     configured_keys_set = set(configured_market_keys())
     clauses = ["1 = 1"]
     params: list[Any] = []
+    append_visible_market_scope(clauses, params, "")
     append_active_prospect_filter(clauses, params)
     rows = get_connection().execute(
         """
@@ -2912,7 +3779,7 @@ def load_stage_counts_by_market() -> dict[str, dict[str, Any]]:
 def load_market_manager_rows() -> list[dict[str, Any]]:
     counts_by_market = load_stage_counts_by_market()
     rows = []
-    for market in load_configured_markets():
+    for market in visible_configured_markets():
         counts = counts_by_market.get(
             market["key"],
             {"total": 0, "stages": {stage: 0 for stage in PIPELINE_STAGE_BUCKETS}},
@@ -2940,8 +3807,7 @@ def load_leads(filters: dict[str, Any]) -> list[dict[str, Any]]:
     params: list[Any] = []
     append_active_prospect_filter(clauses, params)
 
-    if filters.get("market"):
-        append_market_filter(clauses, params, filters["market"])
+    append_visible_market_scope(clauses, params, filters.get("market", ""))
     if filters.get("niche"):
         clauses.append("niche = ?")
         params.append(filters["niche"])
@@ -3027,7 +3893,7 @@ def load_trash_rows(market: str = "") -> list[dict[str, Any]]:
     clauses = ["1 = 1"]
     params: list[Any] = []
     append_trash_prospect_filter(clauses, params)
-    append_market_filter(clauses, params, market)
+    append_visible_market_scope(clauses, params, market)
     rows = get_connection().execute(
         f"""
         SELECT *
@@ -3084,7 +3950,7 @@ def load_crm_stage_prospects(
 def load_crm_prospects(market: str = "") -> list[dict[str, Any]]:
     clauses = ["1 = 1"]
     params: list[Any] = []
-    append_market_filter(clauses, params, market)
+    append_visible_market_scope(clauses, params, market)
     append_active_prospect_filter(clauses, params)
     rows = get_connection().execute(
         f"""
@@ -3100,7 +3966,99 @@ def load_crm_prospects(market: str = "") -> list[dict[str, Any]]:
         prospect = _row_to_dict(row)
         prospect["pipeline_stage"] = compute_pipeline_stage(prospect)
         prospects.append(prospect)
+    attach_quote_summaries_to_prospects(prospects)
     return prospects
+
+
+def attach_quote_summaries_to_prospects(prospects: list[dict[str, Any]]) -> None:
+    prospect_ids = [int(prospect["id"]) for prospect in prospects if prospect.get("id") is not None]
+    if not prospect_ids:
+        return
+    rows = []
+    for start in range(0, len(prospect_ids), 500):
+        chunk = prospect_ids[start:start + 500]
+        placeholders = ",".join("?" for _ in chunk)
+        rows.extend(
+            get_connection().execute(
+                f"""
+                SELECT id, quote_key, prospect_id, status, package_name,
+                       one_time_total_cents, recurring_monthly_total_cents,
+                       valid_until, updated_at
+                FROM quotes
+                WHERE prospect_id IN ({placeholders})
+                ORDER BY prospect_id, updated_at DESC, id DESC
+                """,
+                chunk,
+            ).fetchall()
+        )
+    quote_counts: dict[int, int] = {}
+    latest_quotes: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        quote = _row_to_dict(row)
+        prospect_id = int(quote["prospect_id"])
+        quote_counts[prospect_id] = quote_counts.get(prospect_id, 0) + 1
+        latest_quotes.setdefault(prospect_id, quote)
+
+    for prospect in prospects:
+        prospect_id = int(prospect["id"])
+        latest_quote = latest_quotes.get(prospect_id)
+        prospect["quote_count"] = quote_counts.get(prospect_id, 0)
+        prospect["latest_quote"] = latest_quote
+        if latest_quote:
+            prospect["latest_quote_status"] = latest_quote.get("status")
+            prospect["latest_quote_amount_cents"] = latest_quote.get("one_time_total_cents")
+            prospect["latest_quote_monthly_cents"] = latest_quote.get("recurring_monthly_total_cents")
+
+
+def list_quotes_for_current_user(limit: int = 200) -> list[dict[str, Any]]:
+    normalized_limit = max(1, min(int(limit or 200), 1000))
+    clauses = ["1 = 1"]
+    params: list[Any] = []
+    apply_prospect_scope(clauses, params, "p")
+    params.append(normalized_limit)
+    rows = get_connection().execute(
+        f"""
+        SELECT q.id, p.business_name AS prospect_business_name,
+               p.market AS prospect_market, p.niche AS prospect_niche
+        FROM quotes q
+        LEFT JOIN prospects p ON p.id = q.prospect_id
+        WHERE {" AND ".join(clauses)}
+        ORDER BY q.updated_at DESC, q.id DESC
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+    quotes: list[dict[str, Any]] = []
+    connection = get_connection()
+    for row in rows:
+        quote = quote_service.get_quote(connection, int(row["id"]))
+        if quote is None:
+            continue
+        quote["prospect_business_name"] = row["prospect_business_name"]
+        quote["prospect_market"] = row["prospect_market"]
+        quote["prospect_niche"] = row["prospect_niche"]
+        quotes.append(quote)
+    return quotes
+
+
+def sync_quote_territory_fields(
+    connection: sqlite3.Connection,
+    quote_id: int,
+    prospect: dict[str, Any],
+) -> None:
+    user = current_dashboard_user()
+    owner_username = str(prospect.get("owner_username") or "").strip()
+    if not owner_username and user is not None:
+        owner_username = user.username
+    connection.execute(
+        """
+        UPDATE quotes
+        SET owner_username = ?,
+            market_state = ?
+        WHERE id = ?
+        """,
+        (owner_username or None, prospect_state_from_record(prospect), quote_id),
+    )
 
 
 def load_contacts(prospect_id: int) -> list[dict[str, Any]]:
@@ -3137,13 +4095,801 @@ def primary_contact_from_contacts(contacts: list[dict[str, Any]]) -> dict[str, A
     return contacts[0] if contacts else None
 
 
+def quote_catalog_view(catalog: dict[str, Any] | None = None) -> dict[str, Any]:
+    raw = catalog or quote_service.load_quote_catalog()
+    packages = []
+    for key, package in (raw.get("base_packages") or {}).items():
+        if not isinstance(package, dict):
+            continue
+        packages.append(
+            {
+                "key": key,
+                "name": package.get("name") or key,
+                "display_price": package.get("display_price") or "",
+                "default_price_cents": int(package.get("default_price_cents") or 0),
+                "default_price_input": cents_to_dollar_input(package.get("default_price_cents")),
+                "description": package.get("description") or "",
+                "best_for": package.get("best_for") or "",
+                "included": package.get("included") if isinstance(package.get("included"), list) else [],
+                "exclusions": package.get("exclusions") if isinstance(package.get("exclusions"), list) else [],
+                "requires_custom_quote": bool(package.get("requires_custom_quote")),
+                "requires_discovery": bool(package.get("requires_discovery")),
+            }
+        )
+
+    addon_groups: dict[str, list[dict[str, Any]]] = {}
+    for key, addon in (raw.get("addons") or {}).items():
+        if not isinstance(addon, dict):
+            continue
+        category = str(addon.get("category") or "other")
+        addon_groups.setdefault(category, []).append(
+            {
+                "key": key,
+                "name": addon.get("name") or key,
+                "description": addon.get("description") or "",
+                "category": category,
+                "default_price_cents": int(addon.get("default_price_cents") or 0),
+                "recurring_interval": addon.get("recurring_interval"),
+                "client_visible": addon.get("client_visible", True),
+                "requires_discovery": bool(addon.get("requires_discovery")),
+                "notes": addon.get("notes") or "",
+            }
+        )
+
+    recurring = []
+    for key, item in (raw.get("recurring_retainers") or {}).items():
+        if not isinstance(item, dict):
+            continue
+        recurring.append(
+            {
+                "key": key,
+                "name": item.get("name") or key,
+                "display_price": item.get("display_price") or "",
+                "description": item.get("description") or "",
+                "default_price_cents": int(item.get("default_price_cents") or 0),
+                "recurring_interval": item.get("recurring_interval") or "monthly",
+                "client_visible": item.get("client_visible", True),
+                "requires_discovery": bool(item.get("requires_discovery")),
+                "notes": item.get("notes") or "",
+            }
+        )
+    return {
+        "base_packages": packages,
+        "addon_groups": [
+            {"category": category, "items": items}
+            for category, items in sorted(addon_groups.items())
+        ],
+        "recurring_retainers": recurring,
+    }
+
+
+def quote_form_state(
+    prospect: dict[str, Any],
+    primary_contact: dict[str, Any] | None,
+    *,
+    quote: dict[str, Any] | None = None,
+    form: Any | None = None,
+) -> dict[str, Any]:
+    catalog = quote_service.load_quote_catalog()
+    valid_until_default = (datetime.now(timezone.utc) + timedelta(days=14)).date().isoformat()
+    contact_metadata = (
+        primary_contact.get("metadata")
+        if primary_contact and isinstance(primary_contact.get("metadata"), dict)
+        else {}
+    )
+    state: dict[str, Any] = {
+        "title": f"Quote for {prospect.get('business_name') or ''}".strip(),
+        "client_business_name": prospect.get("business_name") or "",
+        "client_contact_name": primary_contact.get("name") if primary_contact else "",
+        "client_email": primary_contact.get("email") if primary_contact else "",
+        "client_phone": (primary_contact or {}).get("phone") or prospect.get("phone") or "",
+        "website_url": prospect.get("website_url") or "",
+        "package_key": "site_refresh",
+        "package_price": "3000",
+        "term_months": "0",
+        "deposit_percent": "50",
+        "valid_until": valid_until_default,
+        "client_visible_notes": "",
+        "internal_notes": "",
+        "assumptions_text": "",
+        "discount_amount": "",
+        "discount_note": "",
+        "addons": {},
+        "recurring": {},
+        "custom_items": [],
+        "line_items": [],
+    }
+    if contact_metadata.get("selected_primary_email") and not state["client_email"]:
+        state["client_email"] = contact_metadata["selected_primary_email"]
+
+    for key, addon in (catalog.get("addons") or {}).items():
+        state["addons"][key] = {
+            "selected": False,
+            "quantity": "1",
+            "unit_price": cents_to_dollar_input(addon.get("default_price_cents")),
+            "optional": False,
+            "client_visible": bool(addon.get("client_visible", True)),
+        }
+    for key, item in (catalog.get("recurring_retainers") or {}).items():
+        state["recurring"][key] = {
+            "selected": False,
+            "unit_price": cents_to_dollar_input(item.get("default_price_cents")),
+            "optional": False,
+            "client_visible": bool(item.get("client_visible", True)),
+        }
+
+    custom_items = []
+    line_items = []
+    if quote:
+        state.update(
+            {
+                "title": quote.get("title") or state["title"],
+                "client_business_name": quote.get("client_business_name") or state["client_business_name"],
+                "client_contact_name": quote.get("client_contact_name") or state["client_contact_name"],
+                "client_email": quote.get("client_email") or state["client_email"],
+                "client_phone": quote.get("client_phone") or state["client_phone"],
+                "website_url": quote.get("website_url") or state["website_url"],
+                "package_key": quote.get("package_key") or state["package_key"],
+                "term_months": str(quote.get("term_months") or 0),
+                "deposit_percent": str(quote.get("deposit_percent") or 50),
+                "valid_until": quote.get("valid_until") or state["valid_until"],
+                "client_visible_notes": quote.get("client_visible_notes") or "",
+                "internal_notes": quote.get("internal_notes") or "",
+            }
+        )
+        assumptions = quote.get("assumptions") if isinstance(quote.get("assumptions"), dict) else {}
+        state["assumptions_text"] = "\n".join(
+            str(item) for item in assumptions.get("items", []) if str(item).strip()
+        )
+        for item in quote.get("line_items", []):
+            item_key = str(item.get("item_key") or "")
+            if item.get("item_type") == "package":
+                state["package_price"] = cents_to_dollar_input(item.get("unit_price_cents"))
+            elif item.get("item_type") == "addon" and item_key in state["addons"]:
+                state["addons"][item_key].update(
+                    {
+                        "selected": True,
+                        "quantity": str(item.get("quantity") or 1),
+                        "unit_price": cents_to_dollar_input(item.get("unit_price_cents")),
+                        "optional": bool(item.get("is_optional")),
+                        "client_visible": bool(item.get("metadata", {}).get("client_visible", True)),
+                    }
+                )
+            elif item.get("item_type") == "recurring" and item_key in state["recurring"]:
+                state["recurring"][item_key].update(
+                    {
+                        "selected": True,
+                        "unit_price": cents_to_dollar_input(item.get("unit_price_cents")),
+                        "optional": bool(item.get("is_optional")),
+                        "client_visible": bool(item.get("metadata", {}).get("client_visible", True)),
+                    }
+                )
+            elif item.get("item_type") == "discount":
+                state["discount_amount"] = cents_to_dollar_input(abs(int(item.get("unit_price_cents") or 0)))
+                state["discount_note"] = str(item.get("metadata", {}).get("note") or "")
+            elif item.get("item_type") == "custom":
+                custom_items.append(
+                    {
+                        "name": item.get("name") or "",
+                        "description": item.get("description") or "",
+                        "quantity": str(item.get("quantity") or 1),
+                        "unit_price": cents_to_dollar_input(item.get("unit_price_cents")),
+                        "recurring_interval": item.get("recurring_interval") or "",
+                        "optional": bool(item.get("is_optional")),
+                        "client_visible": bool(item.get("metadata", {}).get("client_visible", True)),
+                    }
+                )
+            if item.get("item_type") != "discount":
+                line_items.append(quote_line_item_form_state(item))
+
+    if form is not None:
+        submitted_package_key = str(form.get("package_key") or "")
+        state.update(
+            {
+                "title": str(form.get("title") or state["title"]),
+                "client_business_name": str(form.get("client_business_name") or ""),
+                "client_contact_name": str(form.get("client_contact_name") or ""),
+                "client_email": str(form.get("client_email") or ""),
+                "client_phone": str(form.get("client_phone") or ""),
+                "website_url": str(form.get("website_url") or ""),
+                "package_key": submitted_package_key,
+                "package_price": str(
+                    form.get(f"package_price_{submitted_package_key}")
+                    or form.get("package_price")
+                    or ""
+                ),
+                "term_months": str(form.get("term_months") or "0"),
+                "deposit_percent": str(form.get("deposit_percent") or "50"),
+                "valid_until": str(form.get("valid_until") or ""),
+                "client_visible_notes": str(form.get("client_visible_notes") or ""),
+                "internal_notes": str(form.get("internal_notes") or ""),
+                "assumptions_text": str(form.get("assumptions_text") or ""),
+                "discount_amount": str(form.get("discount_amount") or ""),
+                "discount_note": str(form.get("discount_note") or ""),
+            }
+        )
+        selected_addons = set(form.getlist("addons"))
+        for key, values in state["addons"].items():
+            values.update(
+                {
+                    "selected": key in selected_addons,
+                    "quantity": str(form.get(f"addon_quantity_{key}") or "1"),
+                    "unit_price": str(form.get(f"addon_price_{key}") or values["unit_price"]),
+                    "optional": form.get(f"addon_optional_{key}") == "1",
+                    "client_visible": form.get(f"addon_client_visible_{key}") == "1",
+                }
+            )
+        selected_recurring = set(form.getlist("recurring"))
+        for key, values in state["recurring"].items():
+            values.update(
+                {
+                    "selected": key in selected_recurring,
+                    "unit_price": str(form.get(f"recurring_price_{key}") or values["unit_price"]),
+                    "optional": form.get(f"recurring_optional_{key}") == "1",
+                    "client_visible": form.get(f"recurring_client_visible_{key}") == "1",
+                }
+            )
+        custom_items = [
+            {
+                "name": str(form.get(f"custom_name_{index}") or ""),
+                "description": str(form.get(f"custom_description_{index}") or ""),
+                "quantity": str(form.get(f"custom_quantity_{index}") or "1"),
+                "unit_price": str(form.get(f"custom_price_{index}") or ""),
+                "recurring_interval": str(form.get(f"custom_recurring_interval_{index}") or ""),
+                "optional": form.get(f"custom_optional_{index}") == "1",
+                "client_visible": form.get(f"custom_client_visible_{index}") == "1",
+            }
+            for index in range(5)
+        ]
+        line_items = quote_line_items_from_form_state(form)
+
+    while len(custom_items) < 5:
+        custom_items.append(
+            {
+                "name": "",
+                "description": "",
+                "quantity": "1",
+                "unit_price": "",
+                "recurring_interval": "",
+                "optional": False,
+                "client_visible": True,
+            }
+        )
+    state["custom_items"] = custom_items[:5]
+    if not line_items:
+        line_items = default_quote_line_items_for_state(state, catalog)
+    state["line_items"] = line_items
+    return state
+
+
+def quote_line_item_form_state(item: dict[str, Any]) -> dict[str, Any]:
+    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+    return {
+        "item_key": str(item.get("item_key") or ""),
+        "item_type": str(item.get("item_type") or "custom"),
+        "category": str(item.get("category") or ""),
+        "name": str(item.get("name") or ""),
+        "description": str(item.get("description") or ""),
+        "quantity": str(item.get("quantity") or 1),
+        "unit_label": str(metadata.get("unit_label") or "each"),
+        "unit_price": cents_to_dollar_input(item.get("unit_price_cents")),
+        "recurring_interval": str(item.get("recurring_interval") or ""),
+        "optional": bool(item.get("is_optional")),
+        "client_visible": bool(metadata.get("client_visible", True)),
+        "salesman_notes": str(metadata.get("salesman_notes") or ""),
+    }
+
+
+def default_quote_line_items_for_state(
+    form_state: dict[str, Any],
+    catalog: dict[str, Any],
+) -> list[dict[str, Any]]:
+    package_key = str(form_state.get("package_key") or "").strip()
+    package = (catalog.get("base_packages") or {}).get(package_key)
+    if not isinstance(package, dict):
+        return []
+    return [
+        {
+            "item_key": package_key,
+            "item_type": "package",
+            "category": "base_package",
+            "name": str(package.get("name") or package_key),
+            "description": str(package.get("description") or ""),
+            "quantity": "1",
+            "unit_label": "each",
+            "unit_price": str(form_state.get("package_price") or cents_to_dollar_input(package.get("default_price_cents"))),
+            "recurring_interval": "",
+            "optional": False,
+            "client_visible": True,
+            "salesman_notes": "",
+        }
+    ]
+
+
+def quote_line_items_from_form_state(form: Any) -> list[dict[str, Any]]:
+    try:
+        count = int(str(form.get("line_item_count") or "0"))
+    except ValueError:
+        count = 0
+    line_items = []
+    for index in range(max(0, min(count, 100))):
+        name = str(form.get(f"line_item_name_{index}") or "").strip()
+        if not name:
+            continue
+        line_items.append(
+            {
+                "item_key": str(form.get(f"line_item_key_{index}") or ""),
+                "item_type": str(form.get(f"line_item_type_{index}") or "custom"),
+                "category": str(form.get(f"line_item_category_{index}") or ""),
+                "name": name,
+                "description": str(form.get(f"line_item_description_{index}") or ""),
+                "quantity": str(form.get(f"line_item_quantity_{index}") or "1"),
+                "unit_label": str(form.get(f"line_item_unit_label_{index}") or "each"),
+                "unit_price": str(form.get(f"line_item_price_{index}") or ""),
+                "recurring_interval": str(form.get(f"line_item_recurring_interval_{index}") or ""),
+                "optional": form.get(f"line_item_optional_{index}") == "1",
+                "client_visible": form.get(f"line_item_client_visible_{index}") == "1",
+                "salesman_notes": str(form.get(f"line_item_salesman_notes_{index}") or ""),
+            }
+        )
+    return line_items
+
+
+def parse_quote_builder_form(
+    form: Any,
+    *,
+    prospect: dict[str, Any],
+    catalog: dict[str, Any],
+) -> dict[str, Any]:
+    package_key = str(form.get("package_key") or "").strip()
+    packages = catalog.get("base_packages") if isinstance(catalog.get("base_packages"), dict) else {}
+    if package_key not in packages:
+        raise ValueError("Choose a base package before saving the quote.")
+    package = packages[package_key]
+    package_price_value = (
+        form.get(f"package_price_{package_key}")
+        or form.get("package_price")
+        or cents_to_dollar_input(package.get("default_price_cents"))
+    )
+    package_price = parse_quote_price(package_price_value, "Package price")
+    if package_price < 0:
+        raise ValueError("Package price cannot be negative.")
+
+    internal_notes = str(form.get("internal_notes") or "").strip()
+    discount_amount = parse_quote_price(form.get("discount_amount"), "Discount")
+    if discount_amount < 0:
+        raise ValueError("Discount cannot be negative.")
+    if discount_amount and not internal_notes:
+        raise ValueError("Internal notes are required when a discount is applied.")
+
+    line_items: list[dict[str, Any]] = [
+        {
+            "item_key": package_key,
+            "item_type": "package",
+            "category": "base_package",
+            "name": package.get("name") or package_key,
+            "description": package.get("description") or "",
+            "quantity": 1,
+            "unit_price_cents": package_price,
+            "sort_order": 0,
+            "metadata": {
+                "display_price": package.get("display_price"),
+                "requires_discovery": bool(package.get("requires_discovery")),
+                "requires_custom_quote": bool(package.get("requires_custom_quote")),
+                "client_visible": True,
+                "unit_label": "each",
+                "salesman_notes": "",
+            },
+        }
+    ]
+    one_time_subtotal = package_price
+    sort_order = 10
+
+    addons = catalog.get("addons") if isinstance(catalog.get("addons"), dict) else {}
+    for key in form.getlist("addons"):
+        addon = addons.get(key)
+        if not isinstance(addon, dict):
+            continue
+        quantity = parse_quote_quantity(form.get(f"addon_quantity_{key}"), addon.get("name") or key)
+        unit_price = parse_quote_price(form.get(f"addon_price_{key}"), addon.get("name") or key)
+        if unit_price < 0:
+            raise ValueError(f"{addon.get('name') or key} price cannot be negative.")
+        optional = form.get(f"addon_optional_{key}") == "1"
+        line_total = quote_line_total(unit_price, quantity)
+        if not optional:
+            one_time_subtotal += line_total
+        line_items.append(
+            {
+                "item_key": key,
+                "item_type": "addon",
+                "category": addon.get("category") or "addon",
+                "name": addon.get("name") or key,
+                "description": addon.get("description") or "",
+                "quantity": quantity,
+                "unit_price_cents": unit_price,
+                "is_optional": optional,
+                "sort_order": sort_order,
+                "metadata": {
+                    "client_visible": form.get(f"addon_client_visible_{key}") == "1",
+                    "requires_discovery": bool(addon.get("requires_discovery")),
+                    "notes": addon.get("notes") or "",
+                    "unit_label": "each",
+                    "salesman_notes": "",
+                },
+            }
+        )
+        sort_order += 10
+
+    recurring = catalog.get("recurring_retainers") if isinstance(catalog.get("recurring_retainers"), dict) else {}
+    for key in form.getlist("recurring"):
+        item = recurring.get(key)
+        if not isinstance(item, dict):
+            continue
+        unit_price = parse_quote_price(form.get(f"recurring_price_{key}"), item.get("name") or key)
+        if unit_price < 0:
+            raise ValueError(f"{item.get('name') or key} price cannot be negative.")
+        line_items.append(
+            {
+                "item_key": key,
+                "item_type": "recurring",
+                "category": "recurring",
+                "name": item.get("name") or key,
+                "description": item.get("description") or "",
+                "quantity": 1,
+                "unit_price_cents": unit_price,
+                "recurring_interval": "monthly",
+                "is_optional": form.get(f"recurring_optional_{key}") == "1",
+                "sort_order": sort_order,
+                "metadata": {
+                    "client_visible": form.get(f"recurring_client_visible_{key}") == "1",
+                    "requires_discovery": bool(item.get("requires_discovery")),
+                    "notes": item.get("notes") or "",
+                    "unit_label": "each",
+                    "salesman_notes": "",
+                },
+            }
+        )
+        sort_order += 10
+
+    for index in range(5):
+        name = str(form.get(f"custom_name_{index}") or "").strip()
+        if not name:
+            continue
+        quantity = parse_quote_quantity(form.get(f"custom_quantity_{index}"), name)
+        unit_price = parse_quote_price(form.get(f"custom_price_{index}"), name)
+        if unit_price < 0:
+            raise ValueError(f"{name} price cannot be negative.")
+        recurring_interval = str(form.get(f"custom_recurring_interval_{index}") or "").strip() or None
+        optional = form.get(f"custom_optional_{index}") == "1"
+        if recurring_interval != "monthly" and not optional:
+            one_time_subtotal += quote_line_total(unit_price, quantity)
+        line_items.append(
+            {
+                "item_type": "custom",
+                "category": "custom",
+                "name": name,
+                "description": str(form.get(f"custom_description_{index}") or "").strip(),
+                "quantity": quantity,
+                "unit_price_cents": unit_price,
+                "recurring_interval": recurring_interval,
+                "is_optional": optional,
+                "sort_order": sort_order,
+                "metadata": {
+                    "client_visible": form.get(f"custom_client_visible_{index}") == "1",
+                    "unit_label": "each",
+                    "salesman_notes": "",
+                },
+            }
+        )
+        sort_order += 10
+
+    if form.get("line_item_mode") == "explicit":
+        line_items, one_time_subtotal = parse_quote_line_item_rows(form)
+
+    if discount_amount > one_time_subtotal:
+        raise ValueError("Discount cannot exceed the one-time subtotal.")
+    if discount_amount:
+        line_items.append(
+            {
+                "item_key": "manual_discount",
+                "item_type": "discount",
+                "category": "discount",
+                "name": "Manual Discount",
+                "description": str(form.get("discount_note") or "").strip(),
+                "quantity": 1,
+                "unit_price_cents": discount_amount,
+                "sort_order": 900,
+                "metadata": {
+                    "note": str(form.get("discount_note") or "").strip(),
+                    "unit_label": "each",
+                    "salesman_notes": str(form.get("discount_note") or "").strip(),
+                },
+            }
+        )
+
+    term_months = parse_nonnegative_int(form.get("term_months"), "Recurring term")
+    deposit_percent = parse_percent(form.get("deposit_percent"))
+    assumptions_text = str(form.get("assumptions_text") or "").strip()
+    assumptions = {
+        "text": assumptions_text,
+        "items": [line.strip() for line in assumptions_text.splitlines() if line.strip()],
+    }
+    package_name = str(package.get("name") or package_key)
+    title = str(form.get("title") or "").strip() or f"{package_name} for {prospect.get('business_name')}"
+    return {
+        "package_key": package_key,
+        "header": {
+            "package_key": package_key,
+            "package_name": package_name,
+            "title": title,
+            "client_business_name": str(form.get("client_business_name") or prospect.get("business_name") or "").strip(),
+            "client_contact_name": str(form.get("client_contact_name") or "").strip(),
+            "client_email": str(form.get("client_email") or "").strip(),
+            "client_phone": str(form.get("client_phone") or prospect.get("phone") or "").strip(),
+            "website_url": str(form.get("website_url") or prospect.get("website_url") or "").strip(),
+            "term_months": term_months,
+            "deposit_percent": deposit_percent,
+            "valid_until": str(form.get("valid_until") or "").strip() or None,
+            "client_visible_notes": str(form.get("client_visible_notes") or "").strip() or None,
+            "assumptions": assumptions,
+            "internal_notes": internal_notes or None,
+            "metadata": {
+                "quote_builder_version": 1,
+                "discount_note": str(form.get("discount_note") or "").strip(),
+                "requires_discovery": bool(package.get("requires_discovery")),
+                "requires_custom_quote": bool(package.get("requires_custom_quote")),
+            },
+        },
+        "line_items": line_items,
+    }
+
+
+def parse_quote_line_item_rows(form: Any) -> tuple[list[dict[str, Any]], int]:
+    try:
+        count = int(str(form.get("line_item_count") or "0"))
+    except ValueError as exc:
+        raise ValueError("Line item count must be numeric.") from exc
+    line_items: list[dict[str, Any]] = []
+    one_time_subtotal = 0
+    for index in range(max(0, min(count, 100))):
+        name = str(form.get(f"line_item_name_{index}") or "").strip()
+        if not name:
+            continue
+        quantity = parse_quote_quantity(form.get(f"line_item_quantity_{index}"), name)
+        unit_price = parse_quote_price(form.get(f"line_item_price_{index}"), name)
+        if unit_price < 0:
+            raise ValueError(f"{name} price cannot be negative.")
+        recurring_interval = str(form.get(f"line_item_recurring_interval_{index}") or "").strip() or None
+        if recurring_interval not in {None, "monthly"}:
+            raise ValueError(f"{name} recurring interval must be one-time or monthly.")
+        optional = form.get(f"line_item_optional_{index}") == "1"
+        item_type = str(form.get(f"line_item_type_{index}") or "custom").strip().lower()
+        if item_type not in quote_service.VALID_ITEM_TYPES or item_type == "discount":
+            item_type = "custom"
+        category = str(form.get(f"line_item_category_{index}") or ("recurring" if recurring_interval == "monthly" else "custom")).strip()
+        unit_label = str(form.get(f"line_item_unit_label_{index}") or "each").strip() or "each"
+        line_total = quote_line_total(unit_price, quantity)
+        if recurring_interval != "monthly" and not optional:
+            one_time_subtotal += line_total
+        line_items.append(
+            {
+                "item_key": str(form.get(f"line_item_key_{index}") or "").strip() or None,
+                "item_type": item_type,
+                "category": category or None,
+                "name": name,
+                "description": str(form.get(f"line_item_description_{index}") or "").strip(),
+                "quantity": quantity,
+                "unit_price_cents": unit_price,
+                "recurring_interval": recurring_interval,
+                "is_optional": optional,
+                "sort_order": index * 10,
+                "metadata": {
+                    "client_visible": form.get(f"line_item_client_visible_{index}") == "1",
+                    "unit_label": unit_label,
+                    "salesman_notes": str(form.get(f"line_item_salesman_notes_{index}") or "").strip(),
+                },
+            }
+        )
+    if not line_items:
+        raise ValueError("Add at least one line item before saving the quote.")
+    return line_items, one_time_subtotal
+
+
+def cents_to_dollar_input(cents: Any) -> str:
+    amount = int(cents or 0)
+    dollars, remainder = divmod(abs(amount), 100)
+    sign = "-" if amount < 0 else ""
+    return f"{sign}{dollars}.{remainder:02d}" if remainder else f"{sign}{dollars}"
+
+
+def parse_quote_price(value: Any, label: str) -> int:
+    try:
+        return quote_service.parse_money_to_cents(value)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a valid dollar amount.") from exc
+
+
+def parse_quote_quantity(value: Any, label: str) -> Decimal:
+    text = str(value if value not in {None, ""} else "1").strip()
+    try:
+        quantity = Decimal(text)
+    except InvalidOperation as exc:
+        raise ValueError(f"{label} quantity must be numeric.") from exc
+    if quantity < 0:
+        raise ValueError(f"{label} quantity cannot be negative.")
+    return quantity
+
+
+def quote_line_total(unit_price_cents: int, quantity: Decimal) -> int:
+    return int(
+        (Decimal(unit_price_cents) * quantity).quantize(
+            Decimal("1"),
+            rounding=ROUND_HALF_UP,
+        )
+    )
+
+
+def parse_nonnegative_int(value: Any, label: str) -> int:
+    text = str(value if value not in {None, ""} else "0").strip()
+    try:
+        number = int(text)
+    except ValueError as exc:
+        raise ValueError(f"{label} must be a whole number.") from exc
+    if number < 0:
+        raise ValueError(f"{label} cannot be negative.")
+    return number
+
+
+def parse_percent(value: Any) -> int:
+    number = parse_nonnegative_int(value if value not in {None, ""} else "50", "Deposit percent")
+    if number > 100:
+        raise ValueError("Deposit percent cannot exceed 100.")
+    return number
+
+
+def quote_message_from_code(code: str | None) -> dict[str, str] | None:
+    if not code:
+        return None
+    if code == "saved":
+        return {"status": "success", "message": "Quote saved."}
+    if code == "deleted":
+        return {"status": "success", "message": "Quote deleted."}
+    if code == "revision_created":
+        return {"status": "success", "message": "Quote revision created."}
+    if code == "status:declined_closed_lost":
+        return {"status": "success", "message": "Quote declined and CRM marked closed lost."}
+    if code.startswith("status:"):
+        return {"status": "success", "message": f"Quote marked {code.split(':', 1)[1]}."}
+    return {"status": "success", "message": str(code)}
+
+
+def handle_quote_lifecycle_action(
+    connection: sqlite3.Connection,
+    quote_id: int,
+    status: str,
+    *,
+    note: str | None = None,
+    close_lost: bool = False,
+) -> dict[str, Any]:
+    normalized = str(status or "").strip().lower()
+    if normalized not in {"sent", "accepted", "declined"}:
+        raise ValueError(f"Unsupported quote lifecycle action: {status}")
+
+    quote = quote_service.update_quote_status(connection, quote_id, normalized, note=note)
+    prospect = _load_prospect_from_connection(connection, int(quote["prospect_id"]))
+    if prospect is None:
+        raise ValueError(f"Prospect {quote['prospect_id']} does not exist.")
+
+    if normalized == "sent":
+        current_status = _normalize_token(prospect.get("status"))
+        if current_status not in QUOTE_MARK_SENT_PROTECTED_STATUSES:
+            apply_crm_stage_change(
+                connection,
+                prospect=prospect,
+                new_status=state.ProspectStatus.PROPOSAL_SENT,
+                note=note or f"Quote {quote.get('quote_key')} marked sent.",
+                metadata={
+                    "source": "quote_mark_sent",
+                    "quote_id": quote.get("id"),
+                    "quote_key": quote.get("quote_key"),
+                },
+            )
+    elif normalized == "accepted":
+        apply_crm_stage_change(
+            connection,
+            prospect=prospect,
+            new_status=state.ProspectStatus.CLOSED_WON,
+            note=note or f"Quote {quote.get('quote_key')} accepted.",
+            metadata={
+                "source": "quote_accepted",
+                "quote_id": quote.get("id"),
+                "quote_key": quote.get("quote_key"),
+            },
+        )
+    elif normalized == "declined" and close_lost:
+        apply_crm_stage_change(
+            connection,
+            prospect=prospect,
+            new_status=state.ProspectStatus.CLOSED_LOST,
+            note=note or f"Quote {quote.get('quote_key')} declined.",
+            metadata={
+                "source": "quote_declined",
+                "quote_id": quote.get("id"),
+                "quote_key": quote.get("quote_key"),
+                "confirmed_close_lost": True,
+            },
+        )
+
+    insert_quote_lifecycle_outreach_event(
+        connection,
+        quote=quote,
+        lifecycle_event={
+            "sent": "quote_marked_sent",
+            "accepted": "quote_accepted",
+            "declined": "quote_declined",
+        }[normalized],
+    )
+    connection.commit()
+    return quote
+
+
+def insert_quote_lifecycle_outreach_event(
+    connection: sqlite3.Connection,
+    *,
+    quote: dict[str, Any],
+    lifecycle_event: str,
+) -> None:
+    now = utc_now()
+    event_nonce = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
+    event_key_seed = f"{quote.get('id')}|{lifecycle_event}|{event_nonce}"
+    event_key = f"{quote.get('prospect_id')}:quote_event:{stable_hash(event_key_seed)[:16]}"
+    metadata = {
+        "quote_id": quote.get("id"),
+        "quote_key": quote.get("quote_key"),
+        "quote_status": quote.get("status"),
+        "quote_event_type": lifecycle_event,
+        "one_time_total_cents": quote.get("one_time_total_cents"),
+        "monthly_total_cents": quote.get("recurring_monthly_total_cents"),
+    }
+    connection.execute(
+        """
+        INSERT INTO outreach_events (
+            event_key, prospect_id, campaign_key, channel, event_type, status,
+            subject, metadata_json, created_at, updated_at
+        ) VALUES (?, ?, 'quote', 'dashboard', 'quote_event', 'recorded', ?, ?, ?, ?)
+        """,
+        (
+            event_key,
+            int(quote["prospect_id"]),
+            quote.get("title") or quote.get("quote_key"),
+            json.dumps(metadata, sort_keys=True),
+            now,
+            now,
+        ),
+    )
+
+
+def _load_prospect_from_connection(
+    connection: sqlite3.Connection,
+    prospect_id: int,
+) -> dict[str, Any] | None:
+    row = connection.execute("SELECT * FROM prospects WHERE id = ?", (prospect_id,)).fetchone()
+    if row is None:
+        return None
+    prospect = _row_to_dict(row)
+    prospect["pipeline_stage"] = compute_pipeline_stage(prospect)
+    prospect["score_explanation"] = parse_json_field(prospect.get("score_explanation_json"))
+    prospect["metadata"] = parse_json_field(prospect.get("metadata_json"))
+    return prospect
+
+
 def load_stage_history(prospect_id: int) -> list[dict[str, Any]]:
     rows = get_connection().execute(
         """
         SELECT *
         FROM outreach_events
         WHERE prospect_id = ?
-          AND (event_type = 'crm_stage_change' OR channel = 'email')
+          AND (event_type = 'crm_stage_change' OR event_type = 'quote_event' OR channel = 'email')
         ORDER BY created_at DESC, id DESC
         """,
         (prospect_id,),
@@ -3153,6 +4899,28 @@ def load_stage_history(prospect_id: int) -> list[dict[str, Any]]:
         event = _row_to_dict(row)
         event["metadata"] = parse_json_field(event.get("metadata_json"))
         events.append(event)
+    quote_rows = get_connection().execute(
+        """
+        SELECT *
+        FROM quote_events
+        WHERE prospect_id = ?
+        ORDER BY created_at DESC, id DESC
+        """,
+        (prospect_id,),
+    ).fetchall()
+    for row in quote_rows:
+        event = _row_to_dict(row)
+        event["channel"] = "quote"
+        event["subject"] = event.get("note") or ""
+        event["metadata"] = parse_json_field(event.get("metadata_json"))
+        events.append(event)
+    events.sort(
+        key=lambda event: (
+            str(event.get("created_at") or event.get("updated_at") or ""),
+            int(event.get("id") or 0),
+        ),
+        reverse=True,
+    )
     return events
 
 
@@ -3301,7 +5069,7 @@ def load_email_infra_status() -> dict[str, Any]:
 def outbound_where_clause(filters: dict[str, str]) -> tuple[str, list[Any]]:
     clauses = ["1 = 1"]
     params: list[Any] = []
-    append_market_filter(clauses, params, filters.get("market", ""))
+    append_visible_market_scope(clauses, params, filters.get("market", ""))
     append_active_prospect_filter(clauses, params)
     if filters.get("niche"):
         clauses.append("niche = ?")
@@ -3822,6 +5590,9 @@ def create_step_1_send_queue(filters: dict[str, str], *, limit: int) -> tuple[in
         ):
             skipped += 1
             continue
+        prospect = require_prospect_access(prospect_id)
+        market_state = prospect_state_from_record(prospect)
+        user = current_dashboard_user()
         nonce = datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S%f")
         # Duplicate safety comes from the partial unique index; queue_key is just a row id.
         key_seed = f"{prospect_id}|{email}|{OUTBOUND_DEFAULT_CAMPAIGN}|{OUTBOUND_DEFAULT_STEP}|{nonce}"
@@ -3835,9 +5606,10 @@ def create_step_1_send_queue(filters: dict[str, str], *, limit: int) -> tuple[in
             """
             INSERT INTO outreach_queue (
                 queue_key, prospect_id, contact_id, email, campaign, step, status,
+                owner_username, market_state,
                 send_after, subject, draft_artifact_id, public_packet_artifact_id,
                 created_at, updated_at, metadata_json
-            ) VALUES (?, ?, ?, ?, ?, ?, 'queued', NULL, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, NULL, ?, ?, ?, ?, ?, ?)
             """,
             (
                 queue_key,
@@ -3846,6 +5618,8 @@ def create_step_1_send_queue(filters: dict[str, str], *, limit: int) -> tuple[in
                 email,
                 OUTBOUND_DEFAULT_CAMPAIGN,
                 OUTBOUND_DEFAULT_STEP,
+                user.username if user else None,
+                market_state,
                 row.get("draft_subject"),
                 row.get("draft", {}).get("id") if row.get("draft") else None,
                 row.get("public_packet", {}).get("id") if row.get("public_packet") else None,
@@ -3874,6 +5648,62 @@ def safe_project_file(path: str | Path | None) -> Path | None:
     except ValueError:
         return None
     return resolved
+
+
+def artifact_path_candidates(path: str | Path | None) -> list[str]:
+    candidates: set[str] = set()
+    raw = str(path or "").strip()
+    if raw:
+        candidates.add(raw)
+        candidates.add(Path(raw).as_posix())
+    resolved = resolve_project_path(path)
+    if resolved is not None:
+        candidates.add(str(resolved))
+        candidates.add(resolved.as_posix())
+        try:
+            relative = resolved.relative_to(PROJECT_ROOT.resolve(strict=False))
+        except ValueError:
+            pass
+        else:
+            candidates.add(str(relative))
+            candidates.add(relative.as_posix())
+    return sorted(candidate for candidate in candidates if candidate)
+
+
+def artifact_prospect_ids_for_path(path: str | Path | None) -> list[int]:
+    candidates = artifact_path_candidates(path)
+    if not candidates:
+        return []
+    placeholders = ", ".join("?" for _ in candidates)
+    rows = get_connection().execute(
+        f"""
+        SELECT DISTINCT prospect_id
+        FROM artifacts
+        WHERE prospect_id IS NOT NULL
+          AND (
+            path IN ({placeholders})
+            OR REPLACE(path, char(92), '/') IN ({placeholders})
+          )
+        """,
+        [*candidates, *candidates],
+    ).fetchall()
+    return [int(row["prospect_id"]) for row in rows if row["prospect_id"] is not None]
+
+
+def require_artifact_path_access(path: str | Path | None) -> None:
+    if dashboard_user_is_admin():
+        return
+    prospect_ids = artifact_prospect_ids_for_path(path)
+    if not prospect_ids:
+        abort(404)
+    for prospect_id in prospect_ids:
+        require_prospect_access(prospect_id)
+
+
+def require_project_file_access(path: str | Path | None) -> None:
+    if dashboard_user_is_admin():
+        return
+    require_artifact_path_access(path)
 
 
 def send_message_from_code(code: str | None) -> dict[str, str] | None:
@@ -4106,24 +5936,44 @@ def send_daily_sent_count(campaign: str) -> int:
         second=0,
         microsecond=0,
     ).isoformat()
+    clauses = [
+        "e.channel = 'email'",
+        "e.campaign_key = ?",
+        "e.status = 'sent'",
+        "e.sent_at IS NOT NULL",
+        "e.sent_at >= ?",
+    ]
+    params: list[Any] = [campaign, start]
+    apply_prospect_scope(clauses, params, "p")
     row = get_connection().execute(
-        """
+        f"""
         SELECT COUNT(*) AS count
-        FROM outreach_events
-        WHERE channel = 'email'
-          AND campaign_key = ?
-          AND status = 'sent'
-          AND sent_at IS NOT NULL
-          AND sent_at >= ?
+        FROM outreach_events e
+        JOIN prospects p ON p.id = e.prospect_id
+        WHERE {" AND ".join(clauses)}
         """,
-        (campaign, start),
+        params,
     ).fetchone()
     return int(row["count"] if row else 0)
 
 
 def load_send_queue_rows(*, limit: int) -> list[dict[str, Any]]:
+    clauses = [
+        "q.step = ?",
+        "q.campaign = ?",
+        "UPPER(COALESCE(p.status, '')) NOT IN (?, ?, ?)",
+        "UPPER(COALESCE(p.qualification_status, '')) NOT IN (?)",
+    ]
+    params: list[Any] = [
+        OUTBOUND_DEFAULT_STEP,
+        OUTBOUND_DEFAULT_CAMPAIGN,
+        *TRASH_STATUSES,
+        *TRASH_QUALIFICATION_STATUSES,
+    ]
+    apply_prospect_scope(clauses, params, "p")
+    params.append(limit)
     rows = get_connection().execute(
-        """
+        f"""
         SELECT
             q.*,
             p.business_name,
@@ -4147,10 +5997,7 @@ def load_send_queue_rows(*, limit: int) -> list[dict[str, Any]]:
         LEFT JOIN contacts c ON c.id = q.contact_id
         LEFT JOIN artifacts d ON d.id = q.draft_artifact_id
         LEFT JOIN artifacts pp ON pp.id = q.public_packet_artifact_id
-        WHERE q.step = ?
-          AND q.campaign = ?
-          AND UPPER(COALESCE(p.status, '')) NOT IN (?, ?, ?)
-          AND UPPER(COALESCE(p.qualification_status, '')) NOT IN (?)
+        WHERE {" AND ".join(clauses)}
         ORDER BY
             CASE LOWER(q.status)
               WHEN 'queued' THEN 0
@@ -4163,13 +6010,7 @@ def load_send_queue_rows(*, limit: int) -> list[dict[str, Any]]:
             q.id ASC
         LIMIT ?
         """,
-        (
-            OUTBOUND_DEFAULT_STEP,
-            OUTBOUND_DEFAULT_CAMPAIGN,
-            *TRASH_STATUSES,
-            *TRASH_QUALIFICATION_STATUSES,
-            limit,
-        ),
+        params,
     ).fetchall()
     result = []
     for row in rows:
@@ -5436,6 +7277,7 @@ def apply_crm_stage_change(
     prospect: dict[str, Any],
     new_status: str,
     note: str | None,
+    metadata: dict[str, Any] | None = None,
 ) -> None:
     old_status = prospect.get("status")
     old_next_action = prospect.get("next_action")
@@ -5466,7 +7308,7 @@ def apply_crm_stage_change(
         new_status=new_status,
         next_action=next_action,
         note=note,
-        metadata={"source": "crm_stage_form"},
+        metadata={"source": "crm_stage_form", **(metadata or {})},
     )
     if new_status == "DISCARDED":
         mark_prospect_trashed(
@@ -5789,6 +7631,53 @@ def visual_category_label(key: str) -> str:
     return key.replace("_", " ").title()
 
 
+def current_job_actor_metadata(market: str | None = None) -> dict[str, Any]:
+    user = current_dashboard_user()
+    market_state = configured_market_state(market)
+    metadata: dict[str, Any] = {
+        "requested_by_user": user.username if user else None,
+        "requested_by_role": user.role if user else None,
+        "market_state": market_state,
+    }
+    if user is not None:
+        metadata["requested_by_allowed_states"] = list(user.allowed_states)
+    return metadata
+
+
+def ensure_current_user_can_create_market_job(market: str | None) -> str | None:
+    market = str(market or "").strip() or None
+    user = current_dashboard_user()
+    if dashboard_user_is_admin(user):
+        return configured_market_state(market)
+    if not market:
+        raise ValueError(territory_denial_message())
+    if not current_user_can_access_market(market, user):
+        raise ValueError(territory_denial_message())
+    return configured_market_state(market)
+
+
+def current_user_can_access_job(job: dict[str, Any]) -> bool:
+    user = current_dashboard_user()
+    if dashboard_user_is_admin(user):
+        return True
+    market_state = territories.normalize_state(job.get("market_state"))
+    if not market_state:
+        market_state = configured_market_state(str(job.get("market") or "").strip())
+    return current_user_can_access_state(market_state, user)
+
+
+def list_dashboard_jobs_for_current_user(limit: int = 50) -> list[dict[str, Any]]:
+    fetch_limit = max(int(limit or 50), 50)
+    jobs = dashboard_jobs.list_jobs(
+        limit=fetch_limit,
+        db_path=current_app.config["DATABASE_PATH"],
+    )
+    if dashboard_user_is_admin():
+        return jobs[:limit]
+    visible = [job for job in jobs if current_user_can_access_job(job)]
+    return visible[:limit]
+
+
 def run_controls_url_from_form(form: Any, *, result: str) -> str:
     query: dict[str, Any] = {"result": result}
     market = str(form.get("market") or "").strip()
@@ -5812,6 +7701,8 @@ def start_job_from_form(form: Any) -> str:
         raise ValueError("Unsupported dashboard job type.")
     if job_type == "full_pipeline":
         raise ValueError("Use the Run page to start a full market pipeline.")
+    if job_type == "reconcile_statuses" and not dashboard_user_is_admin():
+        raise ValueError(territory_denial_message())
 
     limit_count = parse_job_limit(form.get("limit_count"))
     is_external = job_type in dashboard_jobs.EXTERNAL_JOB_TYPES
@@ -5829,7 +7720,10 @@ def start_job_from_form(form: Any) -> str:
 
     market = str(form.get("market") or "").strip() or None
     if market == UNKNOWN_MARKET_VALUE:
+        if not dashboard_user_is_admin():
+            raise ValueError(territory_denial_message())
         raise ValueError("Select a specific configured market before starting a job.")
+    market_state = ensure_current_user_can_create_market_job(market)
     niche = str(form.get("niche") or "").strip() or None
     if job_type == "places_pull" and (not market or not niche):
         raise ValueError("Places Pull requires a specific market and niche.")
@@ -5837,7 +7731,10 @@ def start_job_from_form(form: Any) -> str:
         raise ValueError("Audit jobs require a market unless Allow all markets is checked.")
 
     command_options: dict[str, Any] = {}
-    metadata: dict[str, Any] = {"db_path": current_app.config["DATABASE_PATH"]}
+    metadata: dict[str, Any] = {
+        "db_path": current_app.config["DATABASE_PATH"],
+        **current_job_actor_metadata(market),
+    }
     if job_type == "audit":
         audit_mode = str(form.get("audit_mode") or "deep").strip().lower()
         if audit_mode not in {"deep", "fast"}:
@@ -5855,6 +7752,8 @@ def start_job_from_form(form: Any) -> str:
         limit_count=limit_count,
         dry_run=dry_run,
         metadata=metadata,
+        requested_by_user=metadata.get("requested_by_user"),
+        market_state=market_state,
     )
     dashboard_jobs.run_job_async(job_key, db_path=current_app.config["DATABASE_PATH"])
     return job_key
@@ -5863,9 +7762,12 @@ def start_job_from_form(form: Any) -> str:
 def start_full_pipeline_from_form(form: Any) -> str:
     market = str(form.get("market") or "").strip()
     if not market or market == UNKNOWN_MARKET_VALUE:
+        if market == UNKNOWN_MARKET_VALUE and not dashboard_user_is_admin():
+            raise ValueError(territory_denial_message())
         raise ValueError("Choose one configured market before starting a full pipeline.")
     if market not in set(configured_market_keys()):
         raise ValueError("Full pipeline requires a market from config/markets.yaml.")
+    market_state = ensure_current_user_can_create_market_job(market)
 
     valid_niches = {niche["key"] for niche in load_configured_niches()}
     niches = [str(value or "").strip() for value in form.getlist("niches")]
@@ -5891,6 +7793,7 @@ def start_full_pipeline_from_form(form: Any) -> str:
     if audit_mode not in {"deep", "fast"}:
         raise ValueError("Choose a valid audit mode.")
 
+    actor_metadata = current_job_actor_metadata(market)
     job_key = dashboard_jobs.create_full_pipeline_job(
         market=market,
         niches=niches,
@@ -5899,7 +7802,13 @@ def start_full_pipeline_from_form(form: Any) -> str:
         artifact_limit=artifact_limit,
         dry_run_all=dry_run_all,
         audit_fast=audit_mode == "fast",
-        metadata={"db_path": current_app.config["DATABASE_PATH"]},
+        metadata={
+            "db_path": current_app.config["DATABASE_PATH"],
+            **actor_metadata,
+            "include_reconcile_statuses": dashboard_user_is_admin(),
+        },
+        requested_by_user=actor_metadata.get("requested_by_user"),
+        market_state=market_state,
     )
     dashboard_jobs.run_job_async(job_key, db_path=current_app.config["DATABASE_PATH"])
     return job_key

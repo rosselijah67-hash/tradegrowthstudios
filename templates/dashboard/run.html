@@ -26,7 +26,7 @@
     <label>
       <span>Market</span>
       <select name="market">
-        <option value="">All markets</option>
+        <option value="">{% if dashboard_current_user.role == "admin" %}All markets{% else %}All accessible markets{% endif %}</option>
         {% for option in market_filter.options %}
           <option value="{{ option.value }}" {% if market_filter.selected == option.value %}selected{% endif %}>{{ option.label }}</option>
         {% endfor %}
@@ -186,10 +186,12 @@
       <input type="checkbox" name="dry_run" value="1" checked>
       <span>Dry run</span>
     </label>
-    <label class="check-row">
-      <input type="checkbox" name="allow_all_markets" value="1">
-      <span>Allow all markets</span>
-    </label>
+    {% if dashboard_current_user.role == "admin" %}
+      <label class="check-row">
+        <input type="checkbox" name="allow_all_markets" value="1">
+        <span>Allow all markets</span>
+      </label>
+    {% endif %}
     <label class="check-row">
       <input type="checkbox" name="confirm_run" value="1">
       <span>Confirm live audit run</span>
@@ -259,30 +261,32 @@
     <button class="button primary" type="submit">Generate Artifacts</button>
   </form>
 
-  <form class="panel pipeline-job-card" method="post" action="{{ url_for('start_dashboard_job') }}">
-    <input type="hidden" name="source" value="run">
-    <input type="hidden" name="job_type" value="reconcile_statuses">
-    <div class="panel-header">
-      <div>
-        <h2>Reconcile Statuses</h2>
-        <p>Normalizes status and next-action drift.</p>
+  {% if dashboard_current_user.role == "admin" %}
+    <form class="panel pipeline-job-card" method="post" action="{{ url_for('start_dashboard_job') }}">
+      <input type="hidden" name="source" value="run">
+      <input type="hidden" name="job_type" value="reconcile_statuses">
+      <div class="panel-header">
+        <div>
+          <h2>Reconcile Statuses</h2>
+          <p>Normalizes status and next-action drift.</p>
+        </div>
       </div>
-    </div>
-    <label>
-      <span>Limit</span>
-      <input type="number" name="limit_count" min="1" max="1000">
-    </label>
-    <label class="check-row">
-      <input type="checkbox" name="dry_run" value="1" checked>
-      <span>Dry run</span>
-    </label>
-    <p class="form-help">Unchecked dry-run writes to SQLite and/or local files.</p>
-    <label class="check-row">
-      <input type="checkbox" name="confirm_run" value="1">
-      <span>Confirm apply</span>
-    </label>
-    <button class="button primary" type="submit">Start Reconcile</button>
-  </form>
+      <label>
+        <span>Limit</span>
+        <input type="number" name="limit_count" min="1" max="1000">
+      </label>
+      <label class="check-row">
+        <input type="checkbox" name="dry_run" value="1" checked>
+        <span>Dry run</span>
+      </label>
+      <p class="form-help">Unchecked dry-run writes to SQLite and/or local files.</p>
+      <label class="check-row">
+        <input type="checkbox" name="confirm_run" value="1">
+        <span>Confirm apply</span>
+      </label>
+      <button class="button primary" type="submit">Start Reconcile</button>
+    </form>
+  {% endif %}
 </section>
 
 <section class="panel full-pipeline-panel">

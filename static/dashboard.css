@@ -86,6 +86,34 @@ a:hover {
   margin: 0;
 }
 
+.nav-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 48px;
+  max-width: 100%;
+  padding: 7px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.nav-user span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.nav-user-name {
+  color: var(--text);
+}
+
+.nav-user-states {
+  color: var(--accent-strong);
+}
+
 .nav-links::after {
   content: "Quinten is Eli's Babygirl";
   display: inline-flex;
@@ -753,6 +781,25 @@ tbody tr:hover td {
   font-weight: 800;
 }
 
+button.table-action {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+.table-action.danger-link {
+  color: var(--danger);
+}
+
+.table-action.danger-link:hover {
+  color: #991b1b;
+  text-decoration: underline;
+}
+
 .website-pill {
   display: inline-flex;
   align-items: center;
@@ -964,6 +1011,27 @@ dd {
   color: var(--muted);
 }
 
+.crm-quote-indicator,
+.crm-quote-cell {
+  display: grid;
+  gap: 2px;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--text);
+  font-size: 0.82rem;
+}
+
+.crm-quote-indicator b,
+.crm-quote-cell b {
+  color: var(--accent-strong);
+}
+
+.crm-quote-cell {
+  min-width: 150px;
+}
+
 .case-crm-grid {
   display: grid;
   grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.2fr);
@@ -1009,6 +1077,246 @@ dd {
 
 .stage-history-panel {
   margin-bottom: 24px;
+}
+
+.quote-create-button {
+  min-height: 44px;
+  padding-inline: 18px;
+  font-size: 0.98rem;
+}
+
+.quote-summary-panel {
+  margin-bottom: 18px;
+}
+
+.quote-summary-grid,
+.quote-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.quote-summary-grid div {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.quote-summary-grid span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.quote-summary-grid strong {
+  overflow-wrap: anywhere;
+}
+
+.quote-link-row,
+.quote-builder-actions,
+.quote-action-forms,
+.table-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.quote-link-row {
+  margin-top: 12px;
+}
+
+.quote-link-row form {
+  margin: 0;
+}
+
+.table-action-row form {
+  margin: 0;
+}
+
+.quote-builder-form {
+  display: grid;
+  gap: 16px;
+}
+
+.quote-builder-section {
+  display: grid;
+  gap: 14px;
+}
+
+.quote-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.quote-wide-field {
+  grid-column: 1 / -1;
+}
+
+.quote-package-grid,
+.quote-addon-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 12px;
+}
+
+.quote-option-card {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.quote-option-card>input[type="radio"] {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.quote-option-card:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.quote-option-card span {
+  display: grid;
+  gap: 2px;
+}
+
+.quote-option-card small,
+.quote-option-card p,
+.quote-option-card em {
+  margin: 0;
+  color: var(--muted);
+}
+
+.quote-option-card em {
+  color: var(--accent-strong);
+  font-style: normal;
+  font-weight: 800;
+}
+
+.quote-option-card summary {
+  cursor: pointer;
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
+.quote-scope-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.quote-scope-columns ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.quote-price-field {
+  max-width: 240px;
+}
+
+.quote-addon-groups {
+  display: grid;
+  gap: 16px;
+}
+
+.quote-addon-group {
+  display: grid;
+  gap: 10px;
+}
+
+.quote-inline-controls,
+.quote-toggle-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.quote-toggle-row {
+  align-items: center;
+}
+
+.quote-custom-lines {
+  display: grid;
+  gap: 10px;
+}
+
+.quote-custom-line {
+  display: grid;
+  grid-template-columns: minmax(140px, 1.2fr) minmax(160px, 1.4fr) minmax(70px, 0.45fr) minmax(80px, 0.55fr) minmax(110px, 0.7fr) minmax(95px, 0.55fr) minmax(120px, 0.7fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.quote-line-item-editor {
+  display: grid;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.quote-line-item-rows {
+  display: grid;
+  gap: 8px;
+}
+
+.quote-line-item-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.2fr) minmax(200px, 1.45fr) minmax(68px, 0.45fr) minmax(86px, 0.55fr) minmax(92px, 0.6fr) minmax(110px, 0.7fr) minmax(190px, 1.25fr) minmax(180px, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-width: 1180px;
+}
+
+.quote-line-item-heading {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.quote-line-item-flags {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.quote-detail-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.7fr);
+  margin-bottom: 16px;
+}
+
+.quote-total-panel .score-list dd {
+  color: var(--text);
+}
+
+.quote-line-panel,
+.quote-actions-panel {
+  margin-bottom: 16px;
+}
+
+.quote-action-forms form {
+  margin: 0;
+}
+
+.quote-confirm-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  font-weight: 700;
 }
 
 .sales-summary-grid,
@@ -1269,6 +1577,29 @@ dd {
   margin-top: 3px;
   color: var(--muted);
   font-weight: 700;
+}
+
+.admin-diagnostics-panel {
+  margin-bottom: 24px;
+}
+
+.admin-diagnostics-panel .panel-header p {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.admin-users-table {
+  min-width: 1080px;
+}
+
+.admin-territories-table {
+  min-width: 980px;
+}
+
+.admin-diagnostics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
 }
 
 .market-cities,
@@ -2054,7 +2385,14 @@ dd {
   .send-batch-form,
   .draft-regenerate-form,
   .draft-status-grid,
-  .market-manager-grid {
+  .quote-form-grid,
+  .quote-detail-grid,
+  .market-manager-grid,
+  .admin-diagnostics-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .quote-custom-line {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -2121,9 +2459,17 @@ dd {
   .draft-status-grid,
   .packet-grid,
   .packet-speed-grid,
+  .quote-summary-grid,
+  .quote-form-grid,
+  .quote-scope-columns,
+  .quote-inline-controls,
+  .quote-toggle-row,
+  .quote-detail-grid,
+  .quote-custom-line,
   .contact-form,
   .contact-item,
-  .timeline-item {
+  .timeline-item,
+  .admin-diagnostics-grid {
     grid-template-columns: 1fr;
   }
 

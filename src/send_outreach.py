@@ -7,6 +7,7 @@ import mimetypes
 import os
 import smtplib
 import ssl
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.message import EmailMessage
@@ -14,7 +15,7 @@ from email.utils import formataddr
 from pathlib import Path
 from typing import Any
 
-from . import db
+from . import actor_context, db
 from .cli_utils import build_parser, finish_command, positive_int, setup_command
 from .config import load_yaml_config, project_path
 
@@ -28,6 +29,7 @@ SENDABLE_NEXT_ACTIONS = {
     "SEND_OUTREACH",
 }
 SENDABLE_STATUSES = {
+    "APPROVED_FOR_OUTREACH",
     "OUTREACH_DRAFTED",
 }
 FOLLOWUP_NEXT_ACTIONS = {
@@ -43,6 +45,8 @@ class SendCandidate:
     prospect: dict[str, Any]
     contact: dict[str, Any] | None
     draft: dict[str, Any]
+    public_packet: dict[str, Any]
+    public_packet_url: str
     email: str
     subject: str
     body: str
@@ -183,6 +187,24 @@ def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _normalize_token(value: Any) -> str:
+    return str(value or "").strip().upper()
+
+
+def _allowed_next_actions_for_step(step: int) -> set[str]:
+    allowed_next_actions = set(SENDABLE_NEXT_ACTIONS)
+    if step > 1:
+        allowed_next_actions.update(FOLLOWUP_NEXT_ACTIONS)
+    return allowed_next_actions
+
+
+def _allowed_statuses_for_step(step: int) -> set[str]:
+    allowed_statuses = set(SENDABLE_STATUSES)
+    if step > 1:
+        allowed_statuses.update(FOLLOWUP_STATUSES)
+    return allowed_statuses
+
+
 def _smtp_config(defaults: dict[str, Any]) -> dict[str, Any]:
     port_value = _env_or_default("SMTP_PORT", "587")
     try:
@@ -221,22 +243,14 @@ def _select_prospects(
     prospect_id: int | None,
     step: int,
 ) -> list[dict[str, Any]]:
-    if prospect_id is not None and step == 1:
-        clauses = ["UPPER(COALESCE(human_review_decision, '')) = 'APPROVED'"]
-        params: list[Any] = []
-    else:
-        allowed_next_actions = set(SENDABLE_NEXT_ACTIONS)
-        allowed_statuses = set(SENDABLE_STATUSES)
-        if step > 1:
-            allowed_next_actions.update(FOLLOWUP_NEXT_ACTIONS)
-            allowed_statuses.update(FOLLOWUP_STATUSES)
-
-        clauses = [
-            "UPPER(COALESCE(human_review_decision, '')) = 'APPROVED'",
-            f"UPPER(COALESCE(next_action, '')) IN ({','.join('?' for _ in allowed_next_actions)})",
-            f"UPPER(COALESCE(status, '')) IN ({','.join('?' for _ in allowed_statuses)})",
-        ]
-        params = sorted(allowed_next_actions) + sorted(allowed_statuses)
+    allowed_next_actions = sorted(_allowed_next_actions_for_step(step))
+    allowed_statuses = sorted(_allowed_statuses_for_step(step))
+    clauses = [
+        "UPPER(COALESCE(human_review_decision, '')) = 'APPROVED'",
+        f"UPPER(COALESCE(next_action, '')) IN ({','.join('?' for _ in allowed_next_actions)})",
+        f"UPPER(COALESCE(status, '')) IN ({','.join('?' for _ in allowed_statuses)})",
+    ]
+    params: list[Any] = [*allowed_next_actions, *allowed_statuses]
 
     if prospect_id is not None:
         clauses.append("id = ?")
@@ -247,6 +261,7 @@ def _select_prospects(
     if niche:
         clauses.append("niche = ?")
         params.append(niche)
+    actor_context.append_actor_scope(clauses, params, "prospects")
 
     sql = f"""
         SELECT *
@@ -320,6 +335,67 @@ def _load_draft(connection: Any, prospect_id: int, step: int) -> dict[str, Any] 
     draft = db.row_to_dict(row)
     draft["metadata"] = _json_loads(draft.get("metadata_json"), {})
     return draft
+
+
+def _load_public_packet(connection: Any, prospect_id: int) -> dict[str, Any] | None:
+    row = connection.execute(
+        """
+        SELECT *
+        FROM artifacts
+        WHERE prospect_id = ?
+          AND artifact_type = 'public_packet'
+        ORDER BY
+          CASE WHEN LOWER(COALESCE(status, '')) = 'ready' THEN 0 ELSE 1 END,
+          id DESC
+        LIMIT 1
+        """,
+        (prospect_id,),
+    ).fetchone()
+    if row is None:
+        return None
+    packet = db.row_to_dict(row)
+    packet["metadata"] = _json_loads(packet.get("metadata_json"), {})
+    return packet
+
+
+def _public_packet_base_url() -> str:
+    value = os.environ.get("PUBLIC_PACKET_BASE_URL")
+    if value and value.strip():
+        return value.strip().rstrip("/")
+    try:
+        config = load_yaml_config("outreach.yaml")
+    except FileNotFoundError:
+        return ""
+    defaults = config.get("defaults") if isinstance(config.get("defaults"), dict) else {}
+    for candidate in (
+        defaults.get("public_packet_base_url") if isinstance(defaults, dict) else None,
+        config.get("PUBLIC_PACKET_BASE_URL"),
+        config.get("public_packet_base_url"),
+    ):
+        if candidate and str(candidate).strip():
+            return str(candidate).strip().rstrip("/")
+    return ""
+
+
+def _public_packet_url(packet: dict[str, Any] | None) -> str:
+    if not packet:
+        return ""
+    metadata = packet.get("metadata") if isinstance(packet.get("metadata"), dict) else {}
+    value = str(
+        packet.get("artifact_url")
+        or metadata.get("public_packet_url")
+        or metadata.get("public_url")
+        or metadata.get("relative_url")
+        or ""
+    ).strip()
+    if not value:
+        return ""
+    if value.startswith("http://") or value.startswith("https://"):
+        return value
+    base_url = _public_packet_base_url()
+    if base_url:
+        return f"{base_url}/{value.lstrip('/')}"
+    return value
 
 
 def _read_draft_body(draft: dict[str, Any]) -> str | None:
@@ -446,6 +522,17 @@ def _candidate_allows_screenshot_attachments(
     return False
 
 
+def _prospect_send_gate_blockers(prospect: dict[str, Any], *, step: int) -> list[str]:
+    blockers: list[str] = []
+    if _normalize_token(prospect.get("human_review_decision")) != "APPROVED":
+        blockers.append("not_approved")
+    if _normalize_token(prospect.get("status")) not in _allowed_statuses_for_step(step):
+        blockers.append("status_not_send_compatible")
+    if _normalize_token(prospect.get("next_action")) not in _allowed_next_actions_for_step(step):
+        blockers.append("next_action_not_send_compatible")
+    return blockers
+
+
 def _screenshot_attachments(
     connection: Any,
     *,
@@ -530,9 +617,22 @@ def _build_candidate(
     attach_requested: bool,
     logger: Any,
 ) -> tuple[SendCandidate | None, str | None]:
+    gate_blockers = _prospect_send_gate_blockers(prospect, step=step)
+    if gate_blockers:
+        return None, ",".join(gate_blockers)
+
     draft = _load_draft(connection, prospect["id"], step)
     if draft is None:
         return None, "missing_draft"
+
+    public_packet = _load_public_packet(connection, prospect["id"])
+    if public_packet is None:
+        return None, "missing_public_packet"
+    if str(public_packet.get("status") or "").lower() != "ready":
+        return None, "public_packet_not_ready"
+    public_packet_url = _public_packet_url(public_packet)
+    if not public_packet_url:
+        return None, "public_packet_url_missing"
 
     contact = _load_contact(connection, prospect["id"])
     email = _recipient_email(contact, draft)
@@ -568,6 +668,8 @@ def _build_candidate(
             prospect=prospect,
             contact=contact,
             draft=draft,
+            public_packet=public_packet,
+            public_packet_url=public_packet_url,
             email=email,
             subject=subject,
             body=body,
@@ -576,6 +678,13 @@ def _build_candidate(
         ),
         None,
     )
+
+
+def _body_with_public_packet(body: str, public_packet_url: str) -> str:
+    body = body.strip()
+    if public_packet_url and public_packet_url not in body:
+        body = f"{body}\n\nI put the short audit draft here: {public_packet_url}".strip()
+    return body
 
 
 def _footer(
@@ -621,7 +730,8 @@ def _compose_message(
         physical_address=physical_address,
         unsubscribe_email=unsubscribe_email,
     )
-    message.set_content(f"{candidate.body.rstrip()}\n\n{footer}\n")
+    body = _body_with_public_packet(candidate.body, candidate.public_packet_url)
+    message.set_content(f"{body.rstrip()}\n\n{footer}\n")
 
     for path in candidate.attachments:
         mime_type, _encoding = mimetypes.guess_type(path.name)
@@ -726,6 +836,8 @@ def _candidate_metadata(candidate: SendCandidate, *, attach_requested: bool) -> 
     return {
         "recipient": candidate.email,
         "step": _draft_step(candidate.draft),
+        "public_packet_artifact_id": candidate.public_packet.get("id"),
+        "public_packet_url": candidate.public_packet_url,
         "attach_screenshots": bool(candidate.attachments),
         "attach_screenshots_requested": attach_requested,
         "attachments": [str(path) for path in candidate.attachments],
@@ -815,6 +927,30 @@ def main() -> int:
             extra={"event": "send_flag_ignored_for_dry_run"},
         )
 
+    try:
+        actor_context.validate_actor_market_access(args.market, allow_global_scope=True)
+    except actor_context.ActorAccessError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    connection = db.init_db(args.db_path)
+    try:
+        if args.prospect_id is not None:
+            actor_context.validate_actor_prospect_access(connection, args.prospect_id)
+    except actor_context.ActorAccessError as exc:
+        connection.close()
+        raise SystemExit(str(exc)) from exc
+
+    if send_enabled and not actor_context.actor_is_present():
+        warning = "No actor scope active; treating this as admin/local execution."
+        print(warning, file=sys.stderr)
+        context.logger.warning(
+            warning,
+            extra={
+                "event": "actor_scope_inactive_send",
+                **actor_context.actor_summary_fields(args.market),
+            },
+        )
+
     if send_enabled and not _validate_send_prerequisites(
         args=args,
         logger=context.logger,
@@ -822,10 +958,18 @@ def main() -> int:
         physical_address=physical_address,
         unsubscribe_email=unsubscribe_email,
     ):
-        finish_command(context, selected=0, planned=0, sent=0, failed=0, skipped=0)
+        connection.close()
+        finish_command(
+            context,
+            selected=0,
+            planned=0,
+            sent=0,
+            failed=0,
+            skipped=0,
+            **actor_context.actor_summary_fields(args.market),
+        )
         return 1
 
-    connection = db.init_db(args.db_path)
     prospects = _select_prospects(
         connection,
         market=args.market,
@@ -985,6 +1129,7 @@ def main() -> int:
         skipped=skipped,
         daily_cap=daily_cap,
         sent_today=sent_today,
+        **actor_context.actor_summary_fields(args.market),
     )
     return 0
 

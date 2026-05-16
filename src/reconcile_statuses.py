@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import db
+from . import actor_context, db
 from .config import get_database_path, load_env
 from .state import (
     AuditDataStatus,
@@ -148,8 +148,10 @@ def _plan_for_prospect(connection: Any, prospect: dict[str, Any]) -> PlannedChan
 
 
 def plan_changes(connection: Any, *, limit: int | None = None) -> list[PlannedChange]:
-    sql = "SELECT * FROM prospects ORDER BY id"
+    clauses = ["1 = 1"]
     params: list[Any] = []
+    actor_context.append_actor_scope(clauses, params, "prospects")
+    sql = f"SELECT * FROM prospects WHERE {' AND '.join(clauses)} ORDER BY id"
     if limit is not None:
         sql += " LIMIT ?"
         params.append(limit)
@@ -208,6 +210,11 @@ def print_summary(changes: list[PlannedChange], *, applied: bool) -> None:
 def main() -> int:
     args = build_arg_parser().parse_args()
     load_env()
+    try:
+        actor_context.validate_actor_market_access(None, allow_global_scope=True)
+    except actor_context.ActorAccessError as exc:
+        raise SystemExit(str(exc)) from exc
+    actor_context.log_actor_scope()
     db_path = Path(args.db_path) if args.db_path else get_database_path()
     connection = db.connect(db_path)
     try:

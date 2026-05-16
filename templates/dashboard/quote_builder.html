@@ -1,0 +1,593 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}{{ "Edit Quote" if mode == "edit" else "Create Quote" }} - {{ prospect.business_name }}{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <a class="back-link" href="{{ url_for('case_file', prospect_id=prospect.id) }}">Back to case</a>
+    <h1>{{ "Edit Quote" if mode == "edit" else "Create Quote" }}</h1>
+    <p>{{ prospect.business_name }}{% if prospect.market %} / {{ prospect.market }}{% endif %}{% if prospect.niche %} / {{ prospect.niche }}{% endif %}</p>
+  </div>
+  {% if quote %}
+  <a class="button" href="{{ url_for('quote_detail', quote_id=quote.id) }}">View Quote</a>
+  {% endif %}
+</section>
+
+{% if error %}
+<div class="notice error">{{ error }}</div>
+{% endif %}
+
+<form class="quote-builder-form" method="post" action="{{ form_action }}" data-quote-builder-form>
+  <input type="hidden" name="prospect_id" value="{{ prospect.id }}">
+
+  <section class="panel quote-builder-section">
+    <div class="panel-header">
+      <h2>Client</h2>
+    </div>
+    <div class="quote-form-grid">
+      <label>
+        <span>Title</span>
+        <input name="title" value="{{ form_state.title }}">
+      </label>
+      <label>
+        <span>Business</span>
+        <input name="client_business_name" value="{{ form_state.client_business_name }}">
+      </label>
+      <label>
+        <span>Contact</span>
+        <input name="client_contact_name" value="{{ form_state.client_contact_name }}">
+      </label>
+      <label>
+        <span>Email</span>
+        <input name="client_email" value="{{ form_state.client_email }}">
+      </label>
+      <label>
+        <span>Phone</span>
+        <input name="client_phone" value="{{ form_state.client_phone }}">
+      </label>
+      <label>
+        <span>Website</span>
+        <input name="website_url" value="{{ form_state.website_url }}">
+      </label>
+    </div>
+  </section>
+
+  <section class="panel quote-builder-section">
+    <div class="panel-header">
+      <h2>Base Package</h2>
+    </div>
+    <div class="quote-package-grid">
+      {% for package in catalog.base_packages %}
+      <article class="quote-option-card">
+        <label class="check-row quote-package-choice">
+          <input type="radio" name="package_key" value="{{ package.key }}" {% if form_state.package_key == package.key %}checked{% endif %}>
+          <span>
+            <strong>{{ package.name }}</strong>
+            <small>{{ package.display_price }}</small>
+          </span>
+        </label>
+        {% if package.requires_discovery %}
+        <em>Requires discovery</em>
+        {% endif %}
+        <p>{{ package.best_for }}</p>
+        <details>
+          <summary>Scope</summary>
+          <div class="quote-scope-columns">
+            <div>
+              <h3>Included</h3>
+              <ul>
+                {% for item in package.included %}
+                <li>{{ item }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+            <div>
+              <h3>Exclusions</h3>
+              <ul>
+                {% for item in package.exclusions %}
+                <li>{{ item }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+          </div>
+        </details>
+        <label>
+          <span>Base price</span>
+          <input name="package_price_{{ package.key }}" value="{{ form_state.package_price if form_state.package_key == package.key else package.default_price_input }}" inputmode="decimal">
+        </label>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel quote-builder-section">
+    <div class="panel-header">
+      <h2>Add-ons</h2>
+    </div>
+    <div class="quote-addon-groups">
+      {% for group in catalog.addon_groups %}
+      <section class="quote-addon-group">
+        <h3>{{ group.category|pretty_label }}</h3>
+        <div class="quote-addon-grid">
+          {% for addon in group['items'] %}
+          {% set values = form_state.addons.get(addon.key) %}
+          <article class="quote-option-card quote-addon-card">
+            <label class="check-row">
+              <input type="checkbox" name="addons" value="{{ addon.key }}" {% if values.selected %}checked{% endif %}>
+              <span>{{ addon.name }}</span>
+            </label>
+            <p>{{ addon.description }}</p>
+            <div class="quote-inline-controls">
+              <label>
+                <span>Qty</span>
+                <input name="addon_quantity_{{ addon.key }}" value="{{ values.quantity }}" inputmode="decimal">
+              </label>
+              <label>
+                <span>Unit</span>
+                <input name="addon_price_{{ addon.key }}" value="{{ values.unit_price }}" inputmode="decimal">
+              </label>
+            </div>
+            <div class="quote-toggle-row">
+              <label class="check-row">
+                <input type="checkbox" name="addon_optional_{{ addon.key }}" value="1" {% if values.optional %}checked{% endif %}>
+                <span>Optional</span>
+              </label>
+              <label class="check-row">
+                <input type="checkbox" name="addon_client_visible_{{ addon.key }}" value="1" {% if values.client_visible %}checked{% endif %}>
+                <span>Client visible</span>
+              </label>
+            </div>
+          </article>
+          {% endfor %}
+        </div>
+      </section>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel quote-builder-section">
+    <div class="panel-header">
+      <h2>Recurring</h2>
+    </div>
+    <div class="quote-addon-grid">
+      {% for item in catalog.recurring_retainers %}
+      {% set values = form_state.recurring.get(item.key) %}
+      <article class="quote-option-card">
+        <label class="check-row">
+          <input type="checkbox" name="recurring" value="{{ item.key }}" {% if values.selected %}checked{% endif %}>
+          <span>{{ item.name }}</span>
+        </label>
+        <p>{{ item.description }}</p>
+        <label>
+          <span>Monthly</span>
+          <input name="recurring_price_{{ item.key }}" value="{{ values.unit_price }}" inputmode="decimal">
+        </label>
+        <div class="quote-toggle-row">
+          <label class="check-row">
+            <input type="checkbox" name="recurring_optional_{{ item.key }}" value="1" {% if values.optional %}checked{% endif %}>
+            <span>Optional</span>
+          </label>
+          <label class="check-row">
+            <input type="checkbox" name="recurring_client_visible_{{ item.key }}" value="1" {% if values.client_visible %}checked{% endif %}>
+            <span>Client visible</span>
+          </label>
+        </div>
+      </article>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel quote-builder-section">
+    <div class="panel-header">
+      <div>
+        <h2>Line Items</h2>
+      </div>
+      <button class="button" type="button" data-add-line-item>Add Line Item</button>
+    </div>
+    <input type="hidden" name="line_item_mode" value="explicit">
+    <input type="hidden" name="line_item_count" value="{{ form_state.line_items|length }}" data-line-item-count>
+    <div class="quote-line-item-editor">
+      <div class="quote-line-item-row quote-line-item-heading" aria-hidden="true">
+        <span>Line item</span>
+        <span>Description</span>
+        <span>Qty</span>
+        <span>Unit</span>
+        <span>Price</span>
+        <span>Term</span>
+        <span>Salesman notes</span>
+        <span>Flags</span>
+      </div>
+      <div class="quote-line-item-rows" data-line-item-rows>
+        {% for item in form_state.line_items %}
+        {% set index = loop.index0 %}
+        <div class="quote-line-item-row" data-line-item-row>
+          <input type="hidden" name="line_item_key_{{ index }}" value="{{ item.item_key }}">
+          <input type="hidden" name="line_item_type_{{ index }}" value="{{ item.item_type }}">
+          <input type="hidden" name="line_item_category_{{ index }}" value="{{ item.category }}">
+          <input name="line_item_name_{{ index }}" value="{{ item.name }}" placeholder="Line item">
+          <input name="line_item_description_{{ index }}" value="{{ item.description }}" placeholder="Description">
+          <input name="line_item_quantity_{{ index }}" value="{{ item.quantity }}" inputmode="decimal" placeholder="Qty">
+          <input name="line_item_unit_label_{{ index }}" value="{{ item.unit_label or 'each' }}" placeholder="each">
+          <input name="line_item_price_{{ index }}" value="{{ item.unit_price }}" inputmode="decimal" placeholder="Price">
+          <select name="line_item_recurring_interval_{{ index }}">
+            <option value="" {% if not item.recurring_interval %}selected{% endif %}>One-time</option>
+            <option value="monthly" {% if item.recurring_interval == "monthly" %}selected{% endif %}>Monthly</option>
+          </select>
+          <input name="line_item_salesman_notes_{{ index }}" value="{{ item.salesman_notes }}" placeholder="Notes">
+          <div class="quote-line-item-flags">
+            <label class="check-row">
+              <input type="checkbox" name="line_item_optional_{{ index }}" value="1" {% if item.optional %}checked{% endif %}>
+              <span>Optional</span>
+            </label>
+            <label class="check-row">
+              <input type="checkbox" name="line_item_client_visible_{{ index }}" value="1" {% if item.client_visible %}checked{% endif %}>
+              <span>Client visible</span>
+            </label>
+            <button class="button" type="button" data-remove-line-item>Remove</button>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+
+  <section class="panel quote-builder-section">
+    <div class="panel-header">
+      <h2>Terms And Notes</h2>
+    </div>
+    <div class="quote-form-grid">
+      <label>
+        <span>Discount</span>
+        <input name="discount_amount" value="{{ form_state.discount_amount }}" inputmode="decimal">
+      </label>
+      <label>
+        <span>Discount note</span>
+        <input name="discount_note" value="{{ form_state.discount_note }}">
+      </label>
+      <label>
+        <span>Deposit percent</span>
+        <input name="deposit_percent" value="{{ form_state.deposit_percent }}" inputmode="numeric">
+      </label>
+      <label>
+        <span>Recurring term months</span>
+        <input name="term_months" value="{{ form_state.term_months }}" inputmode="numeric">
+      </label>
+      <label>
+        <span>Valid until</span>
+        <input type="date" name="valid_until" value="{{ form_state.valid_until }}">
+      </label>
+      <label class="quote-wide-field">
+        <span>Client-facing notes</span>
+        <textarea name="client_visible_notes" rows="4">{{ form_state.client_visible_notes }}</textarea>
+      </label>
+      <label class="quote-wide-field">
+        <span>Assumptions</span>
+        <textarea name="assumptions_text" rows="4">{{ form_state.assumptions_text }}</textarea>
+      </label>
+      <label class="quote-wide-field">
+        <span>Internal notes</span>
+        <textarea name="internal_notes" rows="4">{{ form_state.internal_notes }}</textarea>
+      </label>
+    </div>
+  </section>
+
+  <div class="quote-builder-actions">
+    <button class="button primary" type="submit">Save Quote</button>
+    <a class="button" href="{{ url_for('case_file', prospect_id=prospect.id) }}">Cancel</a>
+  </div>
+</form>
+
+{% set quote_catalog_payload = {"packages": catalog.base_packages, "addon_groups": catalog.addon_groups, "recurring": catalog.recurring_retainers} %}
+<script id="quote-line-catalog" type="application/json">{{ quote_catalog_payload|tojson }}</script>
+<script id="quote-line-initial" type="application/json">{{ form_state.line_items|tojson }}</script>
+<script>
+  (() => {
+    const form = document.querySelector("[data-quote-builder-form]");
+    if (!form) {
+      return;
+    }
+
+    const rowsNode = form.querySelector("[data-line-item-rows]");
+    const countInput = form.querySelector("[data-line-item-count]");
+    const addButton = form.querySelector("[data-add-line-item]");
+    const catalogNode = document.getElementById("quote-line-catalog");
+    const initialNode = document.getElementById("quote-line-initial");
+    const catalog = catalogNode ? JSON.parse(catalogNode.textContent || "{}") : {};
+    const initialRows = initialNode ? JSON.parse(initialNode.textContent || "[]") : [];
+    const addonMap = new Map();
+    const recurringMap = new Map((catalog.recurring || []).map((item) => [item.key, item]));
+
+    (catalog.addon_groups || []).forEach((group) => {
+      (group.items || []).forEach((item) => addonMap.set(item.key, item));
+    });
+
+    const rowKey = (row) => `${row.item_type || "custom"}:${row.item_key || row.name || ""}`;
+
+    const field = (name) => form.elements[name];
+    const fieldValue = (name, fallback = "") => {
+      const input = field(name);
+      return input ? input.value : fallback;
+    };
+    const fieldChecked = (name) => {
+      const input = field(name);
+      return input ? Boolean(input.checked) : false;
+    };
+
+    const readRows = () => {
+      const rows = [];
+      rowsNode.querySelectorAll("[data-line-item-row]").forEach((row, index) => {
+        const name = fieldValue(`line_item_name_${index}`).trim();
+        if (!name) {
+          return;
+        }
+        rows.push({
+          item_key: fieldValue(`line_item_key_${index}`),
+          item_type: fieldValue(`line_item_type_${index}`, "custom"),
+          category: fieldValue(`line_item_category_${index}`),
+          name,
+          description: fieldValue(`line_item_description_${index}`),
+          quantity: fieldValue(`line_item_quantity_${index}`, "1"),
+          unit_label: fieldValue(`line_item_unit_label_${index}`, "each") || "each",
+          unit_price: fieldValue(`line_item_price_${index}`),
+          recurring_interval: fieldValue(`line_item_recurring_interval_${index}`),
+          optional: fieldChecked(`line_item_optional_${index}`),
+          client_visible: fieldChecked(`line_item_client_visible_${index}`),
+          salesman_notes: fieldValue(`line_item_salesman_notes_${index}`),
+        });
+      });
+      return rows;
+    };
+
+    const lineFromPackage = () => {
+      const selected = form.querySelector('input[name="package_key"]:checked');
+      if (!selected) {
+        return null;
+      }
+      const item = (catalog.packages || []).find((packageItem) => packageItem.key === selected.value);
+      if (!item) {
+        return null;
+      }
+      return {
+        item_key: item.key,
+        item_type: "package",
+        category: "base_package",
+        name: item.name || item.key,
+        description: item.description || "",
+        quantity: "1",
+        unit_label: "each",
+        unit_price: fieldValue(`package_price_${item.key}`, item.default_price_input || ""),
+        recurring_interval: "",
+        optional: false,
+        client_visible: true,
+        salesman_notes: "",
+      };
+    };
+
+    const selectedLines = () => {
+      const lines = [];
+      const packageLine = lineFromPackage();
+      if (packageLine) {
+        lines.push(packageLine);
+      }
+
+      form.querySelectorAll('input[name="addons"]:checked').forEach((input) => {
+        const item = addonMap.get(input.value);
+        if (!item) {
+          return;
+        }
+        lines.push({
+          item_key: item.key,
+          item_type: "addon",
+          category: item.category || "addon",
+          name: item.name || item.key,
+          description: item.description || "",
+          quantity: fieldValue(`addon_quantity_${item.key}`, "1"),
+          unit_label: "each",
+          unit_price: fieldValue(`addon_price_${item.key}`, ""),
+          recurring_interval: "",
+          optional: fieldChecked(`addon_optional_${item.key}`),
+          client_visible: fieldChecked(`addon_client_visible_${item.key}`),
+          salesman_notes: "",
+        });
+      });
+
+      form.querySelectorAll('input[name="recurring"]:checked').forEach((input) => {
+        const item = recurringMap.get(input.value);
+        if (!item) {
+          return;
+        }
+        lines.push({
+          item_key: item.key,
+          item_type: "recurring",
+          category: "recurring",
+          name: item.name || item.key,
+          description: item.description || "",
+          quantity: "1",
+          unit_label: "each",
+          unit_price: fieldValue(`recurring_price_${item.key}`, ""),
+          recurring_interval: "monthly",
+          optional: fieldChecked(`recurring_optional_${item.key}`),
+          client_visible: fieldChecked(`recurring_client_visible_${item.key}`),
+          salesman_notes: "",
+        });
+      });
+
+      return lines;
+    };
+
+    const mergeRows = (generated, existing) => {
+      const existingByKey = new Map(existing.map((row) => [rowKey(row), row]));
+      const usedKeys = new Set();
+      const rows = generated.map((row) => {
+        const key = rowKey(row);
+        const previous = existingByKey.get(key);
+        usedKeys.add(key);
+        if (!previous) {
+          return row;
+        }
+        return {
+          ...previous,
+          item_key: row.item_key,
+          item_type: row.item_type,
+          category: row.category,
+          quantity: row.quantity,
+          unit_price: row.unit_price,
+          recurring_interval: row.recurring_interval,
+          optional: row.optional,
+          client_visible: row.client_visible,
+          name: previous.name || row.name,
+          description: previous.description || row.description,
+          unit_label: previous.unit_label || "each",
+        };
+      });
+      existing.forEach((row) => {
+        if (!usedKeys.has(rowKey(row)) && (!row.item_key || row.item_type === "custom")) {
+          rows.push(row);
+        }
+      });
+      return rows;
+    };
+
+    const input = (name, value, placeholder = "") => {
+      const element = document.createElement("input");
+      element.name = name;
+      element.value = value || "";
+      element.placeholder = placeholder;
+      return element;
+    };
+
+    const hidden = (name, value) => {
+      const element = input(name, value);
+      element.type = "hidden";
+      return element;
+    };
+
+    const checkbox = (name, checked, labelText) => {
+      const label = document.createElement("label");
+      label.className = "check-row";
+      const element = document.createElement("input");
+      element.type = "checkbox";
+      element.name = name;
+      element.value = "1";
+      element.checked = Boolean(checked);
+      const span = document.createElement("span");
+      span.textContent = labelText;
+      label.append(element, span);
+      return label;
+    };
+
+    const intervalSelect = (name, value) => {
+      const select = document.createElement("select");
+      select.name = name;
+      [
+        ["", "One-time"],
+        ["monthly", "Monthly"],
+      ].forEach(([optionValue, label]) => {
+        const option = document.createElement("option");
+        option.value = optionValue;
+        option.textContent = label;
+        option.selected = optionValue === (value || "");
+        select.append(option);
+      });
+      return select;
+    };
+
+    const renderRows = (rows) => {
+      rowsNode.textContent = "";
+      rows.forEach((row, index) => {
+        const wrapper = document.createElement("div");
+        wrapper.className = "quote-line-item-row";
+        wrapper.dataset.lineItemRow = "true";
+        wrapper.append(
+          hidden(`line_item_key_${index}`, row.item_key || ""),
+          hidden(`line_item_type_${index}`, row.item_type || "custom"),
+          hidden(`line_item_category_${index}`, row.category || ""),
+          input(`line_item_name_${index}`, row.name, "Line item"),
+          input(`line_item_description_${index}`, row.description, "Description"),
+          input(`line_item_quantity_${index}`, row.quantity || "1", "Qty"),
+          input(`line_item_unit_label_${index}`, row.unit_label || "each", "each"),
+          input(`line_item_price_${index}`, row.unit_price, "Price"),
+          intervalSelect(`line_item_recurring_interval_${index}`, row.recurring_interval)
+        );
+
+        const notes = input(`line_item_salesman_notes_${index}`, row.salesman_notes, "Notes");
+        const flags = document.createElement("div");
+        flags.className = "quote-line-item-flags";
+        const remove = document.createElement("button");
+        remove.className = "button";
+        remove.type = "button";
+        remove.dataset.removeLineItem = "true";
+        remove.textContent = "Remove";
+        flags.append(
+          checkbox(`line_item_optional_${index}`, row.optional, "Optional"),
+          checkbox(`line_item_client_visible_${index}`, row.client_visible !== false, "Client visible"),
+          remove
+        );
+        wrapper.append(notes, flags);
+        rowsNode.append(wrapper);
+      });
+      countInput.value = String(rows.length);
+    };
+
+    const syncFromSelections = () => {
+      renderRows(mergeRows(selectedLines(), readRows()));
+    };
+
+    addButton?.addEventListener("click", () => {
+      renderRows([
+        ...readRows(),
+        {
+          item_key: "",
+          item_type: "custom",
+          category: "custom",
+          name: "",
+          description: "",
+          quantity: "1",
+          unit_label: "each",
+          unit_price: "",
+          recurring_interval: "",
+          optional: false,
+          client_visible: true,
+          salesman_notes: "",
+        },
+      ]);
+    });
+
+    rowsNode.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-remove-line-item]");
+      if (!button) {
+        return;
+      }
+      const row = button.closest("[data-line-item-row]");
+      row?.remove();
+      renderRows(readRows());
+    });
+
+    form.addEventListener("change", (event) => {
+      if (event.target.closest("[data-line-item-row]")) {
+        countInput.value = String(readRows().length);
+        return;
+      }
+      syncFromSelections();
+    });
+
+    form.addEventListener("input", (event) => {
+      if (event.target.closest("[data-line-item-row]")) {
+        return;
+      }
+      const name = event.target.name || "";
+      if (
+        name.startsWith("package_price_") ||
+        name.startsWith("addon_quantity_") ||
+        name.startsWith("addon_price_") ||
+        name.startsWith("recurring_price_")
+      ) {
+        syncFromSelections();
+      }
+    });
+
+    renderRows(initialRows.length ? initialRows : selectedLines());
+  })();
+</script>
+{% endblock %}

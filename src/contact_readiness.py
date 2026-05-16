@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from . import db
+from . import actor_context, db
 from .cli_utils import build_parser, finish_command, setup_command
 from .config import project_path
 
@@ -391,6 +391,7 @@ def select_prospects(
                 )
                 """
             )
+    actor_context.append_actor_scope(clauses, params, "prospects")
     where_sql = " AND ".join(clauses) if clauses else "1 = 1"
     sql = f"""
         SELECT *
@@ -715,8 +716,19 @@ def main() -> int:
     parser = build_arg_parser()
     args = parser.parse_args()
     context = setup_command(args, COMMAND)
+    try:
+        actor_context.validate_actor_market_access(args.market, allow_global_scope=True)
+    except actor_context.ActorAccessError as exc:
+        raise SystemExit(str(exc)) from exc
 
     connection = db.init_db(args.db_path)
+    try:
+        if args.prospect_id is not None:
+            actor_context.validate_actor_prospect_access(connection, args.prospect_id)
+    except actor_context.ActorAccessError as exc:
+        connection.close()
+        raise SystemExit(str(exc)) from exc
+
     prospects = select_prospects(
         connection,
         market=args.market,
@@ -770,6 +782,7 @@ def main() -> int:
         sendable_candidates=sendable_candidates,
         rejected_candidates=rejected_candidates,
         csv_path=csv_path,
+        **actor_context.actor_summary_fields(args.market),
     )
     return 0
 

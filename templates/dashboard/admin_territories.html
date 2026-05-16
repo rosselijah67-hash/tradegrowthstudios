@@ -1,0 +1,119 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Admin Territories - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <h1>Admin</h1>
+    <p>State ownership, configured market coverage, and prospect distribution.</p>
+  </div>
+  <div class="link-list">
+    <a class="button" href="{{ url_for('admin_users') }}">Users</a>
+    <a class="button primary" href="{{ url_for('admin_territories') }}">Territories</a>
+  </div>
+</section>
+
+{% if conflicts %}
+  <div class="notice error">
+    Territory conflict detected. Non-admin access remains restrictive until ownership is corrected.
+  </div>
+{% endif %}
+
+<section class="table-panel admin-diagnostics-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Territories</h2>
+      <p>Owners are non-admin users assigned to each state in config/users.yaml.</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="compact-table admin-territories-table">
+      <thead>
+        <tr>
+          <th>State</th>
+          <th>Owner</th>
+          <th>Markets</th>
+          <th>Prospects</th>
+          <th>Conflicts</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for territory in territory_rows %}
+          <tr>
+            <td><strong>{{ territory.state }}</strong></td>
+            <td>{{ territory.owner_username or "Unassigned" }}</td>
+            <td>
+              <div class="stage-chip-list">
+                {% for market in territory.markets %}
+                  <span>{{ market.label }} <code>{{ market.key }}</code></span>
+                {% else %}
+                  <span class="empty">No configured markets</span>
+                {% endfor %}
+              </div>
+            </td>
+            <td>{{ territory.prospect_count }}</td>
+            <td>
+              {% if territory.conflicts %}
+                <div class="copy-warning-list">
+                  {% for conflict in territory.conflicts %}
+                    <span class="warning-chip">{{ conflict }}</span>
+                  {% endfor %}
+                </div>
+              {% else %}
+                <span class="empty">None</span>
+              {% endif %}
+            </td>
+          </tr>
+        {% else %}
+          <tr>
+            <td colspan="5" class="empty">No territory data found.</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="admin-diagnostics-grid">
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Unassigned States</h2>
+    </div>
+    <div class="scope-grid">
+      {% for territory in unassigned_states %}
+        <div>
+          <h3>{{ territory.state }}</h3>
+          <p class="muted">
+            {{ territory.prospect_count }} prospects,
+            {{ territory.markets|length }} configured markets
+          </p>
+        </div>
+      {% else %}
+        <p class="empty">No unassigned states with configured markets or prospects.</p>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Missing State</h2>
+    </div>
+    <div class="scope-grid">
+      {% for market in missing_state_markets %}
+        <div>
+          <h3>{{ market.label }}</h3>
+          <p class="muted"><code>{{ market.key }}</code></p>
+        </div>
+      {% else %}
+        <p class="empty">No configured markets are missing a recognizable state.</p>
+      {% endfor %}
+      {% if unknown_prospect_count %}
+        <div class="notice error">
+          {{ unknown_prospect_count }} prospects have no recognizable state.
+        </div>
+      {% endif %}
+    </div>
+  </div>
+</section>
+{% endblock %}
