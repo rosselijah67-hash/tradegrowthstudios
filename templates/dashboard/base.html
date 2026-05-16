@@ -27,14 +27,14 @@
       <a href="{{ url_for('admin_home') }}" class="{% if active_page == 'admin' %}active{% endif %}">Admin</a>
       {% endif %}
       {% if dashboard_current_user %}
+      <a href="{{ url_for('trash_can') }}" class="{% if active_page == 'trash' %}active{% endif %}">Trash</a>
+      <a href="{{ url_for('health') }}">Health</a>
+      <a href="{{ url_for('logout') }}">Logout</a>
       <div class="nav-user" aria-label="Current user">
         <span class="nav-user-name">{{ dashboard_current_user.username }}</span>
         <span>{{ dashboard_current_user.role }}</span>
         <span class="nav-user-states">{{ dashboard_allowed_states_summary }}</span>
       </div>
-      <a href="{{ url_for('trash_can') }}" class="{% if active_page == 'trash' %}active{% endif %}">Trash</a>
-      <a href="{{ url_for('health') }}">Health</a>
-      <a href="{{ url_for('logout') }}">Logout</a>
       {% endif %}
     </nav>
   </header>

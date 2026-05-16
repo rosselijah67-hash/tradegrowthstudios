@@ -2,23 +2,35 @@ users:
   ADMIN:
     role: admin
     display_name: Admin
-    allowed_states: ["*"]
+    allowed_states:
+    - '*'
     password_hash_env: AUTH_ADMIN_PASSWORD_HASH
-
-  QWHITE:
-    role: user
-    display_name: Quinten
-    allowed_states: ["OH", "KY", "TX", "FL", "MI", "NC"]
-    password_hash_env: AUTH_QWHITE_PASSWORD_HASH
-
-  JROSS:
-    role: user
-    display_name: Josiah
-    allowed_states: ["IN", "PA", "TN", "AR", "OK", "CO"]
-    password_hash_env: AUTH_JROSS_PASSWORD_HASH
-
   AG:
     role: user
     display_name: Austin
-    allowed_states: ["MO", "IL", "GA", "AL", "SC"]
+    allowed_states:
+    - GA
+    - IL
     password_hash_env: AUTH_AG_PASSWORD_HASH
+  JOSHGETSMONEY:
+    role: user
+    display_name: Joshua
+    allowed_states:
+    - CO
+    - MI
+    password_hash_env: AUTH_JOSHGETSMONEY_PASSWORD_HASH
+  JROSS:
+    role: user
+    display_name: Josiah
+    allowed_states:
+    - IN
+    - TN
+    password_hash_env: AUTH_JROSS_PASSWORD_HASH
+  QWHITE:
+    role: user
+    display_name: Quinten
+    allowed_states:
+    - FL
+    - OH
+    - TX
+    password_hash_env: AUTH_QWHITE_PASSWORD_HASH
