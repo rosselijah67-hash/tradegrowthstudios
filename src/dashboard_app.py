@@ -3994,6 +3994,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         artifacts = load_artifacts(prospect_id)
         audits = load_audits(prospect_id)
         contacts = load_contacts(prospect_id)
+        case_tasks = load_case_tasks(prospect_id)
         primary_contact = primary_contact_from_contacts(contacts)
         stage_history = load_stage_history(prospect_id)
         outreach_drafts = load_outreach_drafts(
