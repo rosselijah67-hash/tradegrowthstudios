@@ -27,34 +27,69 @@
 </form>
 
 <section class="crm-board">
-  {% for column in columns %}
-    <article class="panel crm-column">
-      <a class="crm-column-header" href="{{ url_for('crm_stage', stage=column.stage, market=market_filter.selected) if market_filter.selected else url_for('crm_stage', stage=column.stage) }}">
-        <span>{{ column.label }}</span>
-        <strong>{{ column.count }}</strong>
-      </a>
-      <div class="crm-card-list">
-        {% for prospect in column.prospects %}
-          <a class="crm-card" href="{{ url_for('case_file', prospect_id=prospect.id) }}">
-            <strong>{{ prospect.business_name }}</strong>
-            <span>{{ prospect.market or "No market" }}{% if prospect.niche %} / {{ prospect.niche }}{% endif %}</span>
-            <small>{{ prospect.next_action or "No next action" }}</small>
-            {% if prospect.quote_count %}
-            <span class="crm-quote-indicator">
-              <b>{{ prospect.latest_quote_status|pretty_label }}</b>
-              {{ prospect.latest_quote_amount_cents|money }}
-              {% if prospect.latest_quote_monthly_cents %}+ {{ prospect.latest_quote_monthly_cents|money }}/mo{% endif %}
-              <small>{{ prospect.quote_count }} quote{{ "" if prospect.quote_count == 1 else "s" }}</small>
-            </span>
+  {% for group in groups %}
+    <article class="panel crm-group crm-group-{{ group.key }}">
+      <div class="crm-group-header">
+        <h2>{{ group.label }}</h2>
+        <span class="pill">{{ group.count }}</span>
+      </div>
+      <div class="crm-group-stage-grid">
+        {% for column in group.columns %}
+          <section class="crm-stage-lane">
+            <a class="crm-column-header" href="{{ column.href }}">
+              <span>{{ column.label }}</span>
+              <strong>{{ column.count }}</strong>
+            </a>
+            <div class="crm-card-list">
+              {% for prospect in column.prospects %}
+                <article class="crm-card">
+                  <div class="crm-card-top">
+                    <strong>{{ prospect.business_name }}</strong>
+                    <span>{{ prospect.market or "No market" }}{% if prospect.niche %} / {{ prospect.niche }}{% endif %}</span>
+                  </div>
+                  <div class="crm-status-row">
+                    <span class="crm-badge">{{ prospect.pipeline_stage|pretty_label }}</span>
+                    <span>{{ prospect.next_action or "No next action" }}</span>
+                  </div>
+                  {% if dashboard_permissions.quotes and prospect.quote_count %}
+                  <a class="crm-quote-indicator" href="{{ url_for('quote_detail', quote_id=prospect.latest_quote.id) }}">
+                    <b>{{ prospect.latest_quote_status|pretty_label }}</b>
+                    <span>
+                      {{ prospect.latest_quote_amount_cents|money }}
+                      {% if prospect.latest_quote_monthly_cents %}+ {{ prospect.latest_quote_monthly_cents|money }}/mo{% endif %}
+                    </span>
+                    <small>{{ prospect.quote_count }} quote{{ "" if prospect.quote_count == 1 else "s" }}</small>
+                  </a>
+                  {% endif %}
+                  <a class="crm-task-summary {% if prospect.has_overdue_task %}is-overdue{% endif %}" href="{{ url_for('case_file', prospect_id=prospect.id) }}{% if prospect.next_task %}#task-{{ prospect.next_task.id }}{% else %}#case-tasks{% endif %}">
+                    <span>
+                      {{ prospect.open_task_count }} open task{{ "" if prospect.open_task_count == 1 else "s" }}
+                      {% if prospect.has_overdue_task %}<b>Overdue</b>{% endif %}
+                    </span>
+                    {% if prospect.next_task %}
+                    <small>{{ prospect.next_task.title }} / {{ prospect.next_task.due_label }}</small>
+                    {% else %}
+                    <small>Add the next step</small>
+                    {% endif %}
+                  </a>
+                  <div class="crm-card-actions">
+                    <a class="table-action" href="{{ url_for('case_file', prospect_id=prospect.id) }}">Open Case</a>
+                    {% if dashboard_permissions.quotes %}
+                    <a class="table-action" href="{{ url_for('new_quote', prospect_id=prospect.id) }}">Create Quote</a>
+                    {% endif %}
+                    <a class="table-action" href="{{ url_for('case_file', prospect_id=prospect.id) }}#case-tasks">Add Task</a>
+                  </div>
+                </article>
+              {% else %}
+                <p class="empty">No prospects.</p>
+              {% endfor %}
+            </div>
+            {% if column.count > column.prospects|length %}
+              <a class="table-action" href="{{ column.href }}">View all</a>
             {% endif %}
-          </a>
-        {% else %}
-          <p class="empty">No prospects in this folder.</p>
+          </section>
         {% endfor %}
       </div>
-      {% if column.count > column.prospects|length %}
-        <a class="table-action" href="{{ url_for('crm_stage', stage=column.stage, market=market_filter.selected) if market_filter.selected else url_for('crm_stage', stage=column.stage) }}">View all</a>
-      {% endif %}
     </article>
   {% endfor %}
 </section>

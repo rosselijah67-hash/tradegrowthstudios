@@ -19,6 +19,7 @@
 {% endif %}
 
 <form class="quote-builder-form" method="post" action="{{ form_action }}" data-quote-builder-form>
+    {{ csrf_input() }}
   <input type="hidden" name="prospect_id" value="{{ prospect.id }}">
 
   <section class="panel quote-builder-section">

@@ -92,6 +92,7 @@
 
 <section class="pipeline-grid" aria-label="Individual pipeline actions">
   <form class="panel pipeline-job-card" method="post" action="{{ url_for('start_dashboard_job') }}">
+    {{ csrf_input() }}
     <input type="hidden" name="source" value="run">
     <input type="hidden" name="job_type" value="places_pull">
     <input type="hidden" name="market" value="{{ market_filter.selected }}">
@@ -101,7 +102,7 @@
         <p>Pulls one configured niche for the selected market.</p>
       </div>
     </div>
-    <p class="warning-text">Preview only — calls Google Places API, does not write to database.</p>
+    <p class="warning-text">Preview only â€” calls Google Places API, does not write to database.</p>
     <p class="form-help">Unlike local dry-runs, this still uses Google API quota.</p>
     <label>
       <span>Niche</span>
@@ -118,7 +119,7 @@
     </label>
     <label class="check-row">
       <input type="checkbox" name="dry_run" value="1" checked>
-      <span>Preview only — calls Google Places API, does not write to database</span>
+      <span>Preview only â€” calls Google Places API, does not write to database</span>
     </label>
     <label class="check-row">
       <input type="checkbox" name="confirm_run" value="1">
@@ -128,6 +129,7 @@
   </form>
 
   <form class="panel pipeline-job-card" method="post" action="{{ url_for('start_dashboard_job') }}">
+    {{ csrf_input() }}
     <input type="hidden" name="source" value="run">
     <input type="hidden" name="job_type" value="eligibility">
     <input type="hidden" name="market" value="{{ market_filter.selected }}">
@@ -159,6 +161,7 @@
   </form>
 
   <form class="panel pipeline-job-card" method="post" action="{{ url_for('start_dashboard_job') }}">
+    {{ csrf_input() }}
     <input type="hidden" name="source" value="run">
     <input type="hidden" name="job_type" value="audit">
     <input type="hidden" name="market" value="{{ market_filter.selected }}">
@@ -200,6 +203,7 @@
   </form>
 
   <form class="panel pipeline-job-card" method="post" action="{{ url_for('start_dashboard_job') }}">
+    {{ csrf_input() }}
     <input type="hidden" name="source" value="run">
     <input type="hidden" name="job_type" value="score">
     <input type="hidden" name="market" value="{{ market_filter.selected }}">
@@ -231,6 +235,7 @@
   </form>
 
   <form class="panel pipeline-job-card" method="post" action="{{ url_for('start_dashboard_job') }}">
+    {{ csrf_input() }}
     <input type="hidden" name="source" value="run">
     <input type="hidden" name="job_type" value="artifacts">
     <input type="hidden" name="market" value="{{ market_filter.selected }}">
@@ -263,6 +268,7 @@
 
   {% if dashboard_current_user.role == "admin" %}
     <form class="panel pipeline-job-card" method="post" action="{{ url_for('start_dashboard_job') }}">
+    {{ csrf_input() }}
       <input type="hidden" name="source" value="run">
       <input type="hidden" name="job_type" value="reconcile_statuses">
       <div class="panel-header">
@@ -297,9 +303,10 @@
     </div>
   </div>
   <p class="warning-text">Includes external API and website calls. Steps run sequentially and stop on the first failure.</p>
-  <p class="warning-text">For Places steps: Preview only — calls Google Places API, does not write to database.</p>
+  <p class="warning-text">For Places steps: Preview only â€” calls Google Places API, does not write to database.</p>
   <p class="form-help">Unlike local dry-runs, this still uses Google API quota.</p>
   <form class="full-pipeline-form" method="post" action="{{ url_for('start_full_market_pipeline') }}">
+    {{ csrf_input() }}
     <input type="hidden" name="market" value="{{ market_filter.selected }}">
 
     <fieldset class="niche-fieldset">

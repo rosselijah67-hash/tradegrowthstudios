@@ -48,6 +48,7 @@
               <a class="table-action" href="{{ url_for('edit_quote', quote_id=quote.id) }}">Edit</a>
               <a class="table-action" href="{{ url_for('quote_export_text', quote_id=quote.id) }}">Export</a>
               <form method="post" action="{{ url_for('delete_quote', quote_id=quote.id) }}" onsubmit="return confirm('Delete this quote and its saved line items? This cannot be undone.');">
+    {{ csrf_input() }}
                 <input type="hidden" name="confirm_delete" value="1">
                 <input type="hidden" name="return_to" value="list">
                 <button class="table-action danger-link" type="submit">Delete</button>

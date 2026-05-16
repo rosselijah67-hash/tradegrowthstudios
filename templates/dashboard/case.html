@@ -30,7 +30,9 @@
     </div>
   </div>
   <div class="case-header-actions">
+    {% if dashboard_permissions.quotes %}
     <a class="button primary quote-create-button" href="{{ url_for('new_quote', prospect_id=prospect.id) }}">Create Quote</a>
+    {% endif %}
     {% if prospect.pipeline_stage in ["CONTACT_MADE", "CALL_BOOKED", "PROPOSAL_SENT", "CLOSED_WON"] %}
     <a class="button primary" href="{{ url_for('sales_packet', prospect_id=prospect.id) }}">Sales Packet</a>
     {% endif %}
@@ -40,6 +42,7 @@
   </div>
 </section>
 
+{% if dashboard_permissions.quotes %}
 {% if latest_quote %}
 <section class="panel quote-summary-panel">
   <div class="panel-header">
@@ -81,9 +84,11 @@
     <a class="button" href="{{ url_for('quote_export_text', quote_id=latest_quote.id) }}">Export</a>
     <a class="button" href="{{ url_for('quote_export_html', quote_id=latest_quote.id) }}">Printable Quote</a>
     <form method="post" action="{{ url_for('create_quote_revision', quote_id=latest_quote.id) }}">
+    {{ csrf_input() }}
       <button class="button" type="submit">Create Revision</button>
     </form>
     <form method="post" action="{{ url_for('delete_quote', quote_id=latest_quote.id) }}" onsubmit="return confirm('Delete this quote and its saved line items? This cannot be undone.');">
+    {{ csrf_input() }}
       <input type="hidden" name="confirm_delete" value="1">
       <input type="hidden" name="return_to" value="case">
       <button class="button danger" type="submit">Delete Quote</button>
@@ -101,6 +106,7 @@
     <a class="button primary" href="{{ url_for('new_quote', prospect_id=prospect.id) }}">Create Quote</a>
   </div>
 </section>
+{% endif %}
 {% endif %}
 
 {% if franchise_exclusion and franchise_exclusion.is_excluded %}
@@ -236,6 +242,7 @@
   </div>
 
   <form class="panel review-form" method="post" action="{{ url_for('record_case_review', prospect_id=prospect.id) }}">
+    {{ csrf_input() }}
     <div class="panel-header">
       <h2>Manual Review</h2>
     </div>
@@ -276,6 +283,7 @@
 
 <section class="case-crm-grid">
   <form class="panel crm-stage-form" method="post" action="{{ url_for('update_case_stage', prospect_id=prospect.id) }}">
+    {{ csrf_input() }}
     <div class="panel-header">
       <div>
         <h2>CRM Stage</h2>
@@ -296,6 +304,230 @@
     </label>
     <button class="button primary" type="submit">Update Stage</button>
   </form>
+
+  <div class="panel task-panel" id="case-tasks">
+    <div class="panel-header">
+      <div>
+        <h2>Tasks</h2>
+        <p>{{ task_context.open|length }} open / {{ task_context.waiting|length }} waiting</p>
+      </div>
+      <a class="table-action" href="{{ url_for('tasks_board', q=prospect.business_name) }}">All Tasks</a>
+    </div>
+
+    {% set next_task = task_context.next %}
+    {% if next_task %}
+    <article class="task-next-banner task-next-{{ next_task.due_bucket }}" id="task-{{ next_task.id }}">
+      <div>
+        <span>Next Task</span>
+        {% if next_task.is_auto %}<span class="task-badge">Auto</span>{% endif %}
+        <h3>{{ next_task.title }}</h3>
+        <p>{{ next_task.type_label }} / {{ next_task.due_label }} / {{ next_task.priority_label }}</p>
+        <p>{{ next_task.assigned_to or "Unassigned" }}</p>
+      </div>
+      <div class="task-actions">
+        <form method="post" action="{{ url_for('complete_task', task_id=next_task.id) }}">
+    {{ csrf_input() }}
+          <input type="hidden" name="return_to" value="case">
+          <button class="button primary" type="submit">Done</button>
+        </form>
+        <form method="post" action="{{ url_for('snooze_task', task_id=next_task.id) }}">
+    {{ csrf_input() }}
+          <input type="hidden" name="return_to" value="case">
+          <input type="hidden" name="quick_snooze" value="tomorrow">
+          <button class="button" type="submit">Snooze</button>
+        </form>
+        <a class="button" href="{{ url_for('task_detail', task_id=next_task.id) }}">Edit</a>
+      </div>
+    </article>
+    {% else %}
+    <p class="empty">No open tasks yet.</p>
+    {% endif %}
+
+    <div class="task-quick-add" aria-label="Quick task presets">
+      <button class="button task-quick-button" type="button" data-task-type="follow_up" data-task-title="Follow up">Follow Up</button>
+      <button class="button task-quick-button" type="button" data-task-type="needs_quote" data-task-title="Needs quote">Needs Quote</button>
+      <button class="button task-quick-button" type="button" data-task-type="call_scheduled" data-task-title="Call">Call</button>
+      <button class="button task-quick-button" type="button" data-task-type="proposal_follow_up" data-task-title="Proposal follow-up">Proposal Follow-Up</button>
+      <button class="button task-quick-button" type="button" data-task-type="collect_assets" data-task-title="Collect assets">Collect Assets</button>
+      <button class="button task-quick-button" type="button" data-task-type="custom" data-task-title="">Custom</button>
+    </div>
+
+    <form class="task-form compact-task-form" method="post" action="{{ url_for('create_case_task', prospect_id=prospect.id) }}" data-task-form>
+    {{ csrf_input() }}
+      {% if latest_quote %}
+      <input type="hidden" name="quote_id" value="{{ latest_quote.id }}">
+      {% endif %}
+      <label>
+        <span>Type</span>
+        <select name="task_type" data-task-type-input>
+          {% for value, label in task_type_options %}
+          <option value="{{ value }}" {% if value == "follow_up" %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="task-title-field">
+        <span>Title</span>
+        <input name="title" data-task-title-input placeholder="Follow up">
+      </label>
+      <label>
+        <span>Due Date</span>
+        <input type="date" name="due_date">
+      </label>
+      <label>
+        <span>Due Time</span>
+        <input type="time" name="due_time">
+      </label>
+      <label>
+        <span>Priority</span>
+        <select name="priority">
+          {% for value, label in task_priority_options %}
+          <option value="{{ value }}" {% if value == "normal" %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Assigned To</span>
+        <input name="assigned_to" value="{{ dashboard_user }}">
+      </label>
+      <label class="task-contact-select">
+        <span>Contact</span>
+        <select name="contact_id">
+          <option value="">No saved contact</option>
+          {% for contact in contacts %}
+          <option value="{{ contact.id }}">{{ contact.name or contact.email or contact.phone or "Unnamed contact" }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Contact Name</span>
+        <input name="contact_name">
+      </label>
+      <label>
+        <span>Contact Email</span>
+        <input name="contact_email">
+      </label>
+      <label>
+        <span>Contact Phone</span>
+        <input name="contact_phone">
+      </label>
+      <label class="task-notes-field">
+        <span>Notes</span>
+        <textarea name="notes" rows="3"></textarea>
+      </label>
+      <button class="button primary" type="submit">Add Task</button>
+    </form>
+
+    <div class="task-list-block">
+      <h3>Open Tasks</h3>
+      <div class="task-list">
+        {% for task in task_context.open %}
+        <article class="task-item task-{{ task.due_bucket }} {% if highlight_task_id == task.id|string %}task-highlight{% endif %}" id="task-{{ task.id }}">
+          <div class="task-item-main">
+            <div class="task-badge-row">
+              <span class="task-badge">{{ task.type_label }}</span>
+              {% if task.is_auto %}<span class="task-badge">Auto</span>{% endif %}
+              <span class="task-badge priority-{{ task.priority }}">{{ task.priority_label }}</span>
+              <span class="task-due">{{ task.due_label }}</span>
+            </div>
+            <strong>{{ task.title }}</strong>
+            {% if task.contact_name or task.contact_email or task.contact_phone %}
+            <small>{{ task.contact_name or "" }}{% if task.contact_email %} / {{ task.contact_email }}{% endif %}{% if task.contact_phone %} / {{ task.contact_phone }}{% endif %}</small>
+            {% endif %}
+            {% if task.notes %}<p>{{ task.notes[:150] }}{% if task.notes|length > 150 %}...{% endif %}</p>{% endif %}
+          </div>
+          <div class="task-actions">
+            <form method="post" action="{{ url_for('complete_task', task_id=task.id) }}">
+    {{ csrf_input() }}
+              <input type="hidden" name="return_to" value="case">
+              <button class="button primary" type="submit">Done</button>
+            </form>
+            <form method="post" action="{{ url_for('snooze_task', task_id=task.id) }}">
+    {{ csrf_input() }}
+              <input type="hidden" name="return_to" value="case">
+              <input type="hidden" name="quick_snooze" value="tomorrow">
+              <button class="button" type="submit">Snooze</button>
+            </form>
+            <form method="post" action="{{ url_for('cancel_task', task_id=task.id) }}">
+    {{ csrf_input() }}
+              <input type="hidden" name="return_to" value="case">
+              <button class="button danger" type="submit">Cancel</button>
+            </form>
+            <a class="button" href="{{ url_for('task_detail', task_id=task.id) }}">Edit</a>
+          </div>
+        </article>
+        {% else %}
+        <p class="empty">No open tasks.</p>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="task-list-block">
+      <h3>Waiting</h3>
+      <div class="task-list">
+        {% for task in task_context.waiting %}
+        <article class="task-item task-waiting {% if highlight_task_id == task.id|string %}task-highlight{% endif %}" id="task-{{ task.id }}">
+          <div class="task-item-main">
+            <div class="task-badge-row">
+              <span class="task-badge">{{ task.type_label }}</span>
+              {% if task.is_auto %}<span class="task-badge">Auto</span>{% endif %}
+              <span class="task-badge priority-{{ task.priority }}">{{ task.priority_label }}</span>
+              <span class="task-due">{{ task.due_label }}</span>
+            </div>
+            <strong>{{ task.title }}</strong>
+            {% if task.contact_name or task.contact_email or task.contact_phone %}
+            <small>{{ task.contact_name or "" }}{% if task.contact_email %} / {{ task.contact_email }}{% endif %}{% if task.contact_phone %} / {{ task.contact_phone }}{% endif %}</small>
+            {% endif %}
+            {% if task.notes %}<p>{{ task.notes[:150] }}{% if task.notes|length > 150 %}...{% endif %}</p>{% endif %}
+          </div>
+          <div class="task-actions">
+            <form method="post" action="{{ url_for('complete_task', task_id=task.id) }}">
+    {{ csrf_input() }}
+              <input type="hidden" name="return_to" value="case">
+              <button class="button primary" type="submit">Done</button>
+            </form>
+            <form method="post" action="{{ url_for('snooze_task', task_id=task.id) }}">
+    {{ csrf_input() }}
+              <input type="hidden" name="return_to" value="case">
+              <input type="hidden" name="quick_snooze" value="tomorrow">
+              <button class="button" type="submit">Snooze</button>
+            </form>
+            <form method="post" action="{{ url_for('cancel_task', task_id=task.id) }}">
+    {{ csrf_input() }}
+              <input type="hidden" name="return_to" value="case">
+              <button class="button danger" type="submit">Cancel</button>
+            </form>
+            <a class="button" href="{{ url_for('task_detail', task_id=task.id) }}">Edit</a>
+          </div>
+        </article>
+        {% else %}
+        <p class="empty">No waiting tasks.</p>
+        {% endfor %}
+      </div>
+    </div>
+
+    <details class="task-list-block task-completed-details">
+      <summary>Completed ({{ task_context.completed|length }})</summary>
+      <div class="task-list">
+        {% for task in task_context.completed %}
+        <article class="task-item task-completed {% if highlight_task_id == task.id|string %}task-highlight{% endif %}" id="task-{{ task.id }}">
+          <div class="task-item-main">
+            <div class="task-badge-row">
+              <span class="task-badge">{{ task.type_label }}</span>
+              {% if task.is_auto %}<span class="task-badge">Auto</span>{% endif %}
+              <span class="task-badge">{{ task.status_label }}</span>
+              <span class="task-due">{{ task.due_label }}</span>
+            </div>
+            <strong>{{ task.title }}</strong>
+            {% if task.outcome_notes %}<p>{{ task.outcome_notes[:150] }}{% if task.outcome_notes|length > 150 %}...{% endif %}</p>{% endif %}
+          </div>
+          <a class="button" href="{{ url_for('task_detail', task_id=task.id) }}">Edit</a>
+        </article>
+        {% else %}
+        <p class="empty">No completed tasks.</p>
+        {% endfor %}
+      </div>
+    </details>
+  </div>
 
   <div class="panel contact-panel">
     <div class="panel-header">
@@ -330,6 +562,7 @@
       {% endfor %}
     </div>
     <form class="contact-form" method="post" action="{{ url_for('save_case_contact', prospect_id=prospect.id) }}">
+    {{ csrf_input() }}
       <input type="hidden" name="contact_id" value="{{ primary_contact.id if primary_contact else '' }}">
       <label>
         <span>Name</span>
@@ -358,6 +591,28 @@
     </form>
   </div>
 </section>
+
+<script>
+  (() => {
+    const form = document.querySelector("[data-task-form]");
+    if (!form) {
+      return;
+    }
+    const typeInput = form.querySelector("[data-task-type-input]");
+    const titleInput = form.querySelector("[data-task-title-input]");
+    document.querySelectorAll(".task-quick-button").forEach((button) => {
+      button.addEventListener("click", () => {
+        if (typeInput) {
+          typeInput.value = button.dataset.taskType || "custom";
+        }
+        if (titleInput) {
+          titleInput.value = button.dataset.taskTitle || "";
+          titleInput.focus();
+        }
+      });
+    });
+  })();
+</script>
 
 <section class="panel stage-history-panel">
   <div class="panel-header">
@@ -459,6 +714,7 @@
     </div>
     <form class="draft-regenerate-form" method="post"
       action="{{ url_for('regenerate_case_outreach_drafts', prospect_id=prospect.id) }}">
+    {{ csrf_input() }}
       <label>
         <span>Style</span>
         <select name="style">
@@ -494,6 +750,7 @@
     <article class="email-draft email-draft-primary">
       <form class="draft-edit-form" method="post"
         action="{{ url_for('save_case_outreach_draft', prospect_id=prospect.id, step=draft.step) }}">
+    {{ csrf_input() }}
       <div class="email-draft-heading">
         <div>
           <h3>Step 1 Draft</h3>
@@ -585,6 +842,7 @@
       <article class="email-draft email-draft-secondary">
         <form class="draft-edit-form" method="post"
           action="{{ url_for('save_case_outreach_draft', prospect_id=prospect.id, step=draft.step) }}">
+    {{ csrf_input() }}
         <div class="email-draft-heading">
           <div>
             <h3>Email {{ draft.step or loop.index }}</h3>
@@ -788,6 +1046,7 @@
 
   <form class="visual-review-form" method="post"
     action="{{ url_for('record_visual_review', prospect_id=prospect.id) }}">
+    {{ csrf_input() }}
     <label class="visual-score-field">
       <span>Overall visual score</span>
       <input type="number" name="visual_total_score" min="0" max="100"

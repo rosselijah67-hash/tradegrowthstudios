@@ -16,6 +16,7 @@
 
 <section class="market-manager-grid">
   <form class="panel market-form" method="post" action="{{ url_for('add_market') }}">
+    {{ csrf_input() }}
     <div class="panel-header">
       <h2>Add Market</h2>
     </div>

@@ -97,6 +97,7 @@
       </div>
       <div class="review-card-actions">
         <form method="post" action="{{ url_for('quick_delete_review_card', prospect_id=prospect.id) }}">
+    {{ csrf_input() }}
           <input type="hidden" name="market" value="{{ market_filter.selected }}">
           <button class="button danger quick-delete-button" type="submit"
             title="Remove this prospect from review and mark it rejected">Delete</button>

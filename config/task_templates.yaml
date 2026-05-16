@@ -1,0 +1,83 @@
+follow_up:
+  title: "Follow up with {business_name}"
+  task_type: follow_up
+  priority: normal
+  default_due_days: 2
+  notes: "Follow up on the last contact or sent material."
+
+needs_quote:
+  title: "Build quote for {business_name}"
+  task_type: needs_quote
+  priority: high
+  default_due_days: 1
+  notes: "Prepare package, add-ons, payment terms, and export text."
+
+call_scheduled:
+  title: "Call {business_name}"
+  task_type: call_scheduled
+  priority: high
+  default_due_days: 0
+  notes: "Use case file, audit findings, quote history, and contact notes."
+
+proposal_follow_up:
+  title: "Follow up on proposal for {business_name}"
+  task_type: proposal_follow_up
+  priority: high
+  default_due_days: 2
+  notes: "Ask whether they want to move forward, revise scope, or close it out."
+
+collect_assets:
+  title: "Collect website assets from {business_name}"
+  task_type: collect_assets
+  priority: normal
+  default_due_days: 3
+  notes: "Logo, photos, service areas, licenses, warranties, financing claims, access details."
+
+client_access_needed:
+  title: "Collect access from {business_name}"
+  task_type: client_access_needed
+  priority: high
+  default_due_days: 1
+  notes: "Domain, hosting, WordPress, analytics, Search Console, form destination, and calendar access."
+
+public_packet_needed:
+  title: "Generate public audit packet"
+  task_type: public_packet_needed
+  priority: normal
+  default_due_days: 0
+  notes: "Generate and verify public packet before outbound."
+
+draft_review:
+  title: "Review outreach draft"
+  task_type: draft_review
+  priority: normal
+  default_due_days: 0
+  notes: "Review Step 1 draft for specificity, tone, and public packet link."
+
+send_outreach:
+  title: "Send approved outreach"
+  task_type: send_outreach
+  priority: normal
+  default_due_days: 0
+  notes: "Confirm send readiness and queue before sending."
+
+contract_deposit:
+  title: "Send contract/deposit next step"
+  task_type: contract_deposit
+  priority: urgent
+  default_due_days: 0
+  notes: "Send SOW/payment instructions after accepted quote."
+
+project_handoff:
+  title: "Project handoff"
+  task_type: project_handoff
+  priority: high
+  default_due_days: 1
+  notes: "Move closed-won lead into fulfillment workflow."
+
+launch_qa:
+  title: "Launch QA"
+  task_type: launch_qa
+  priority: high
+  default_due_days: 0
+  notes: "Forms, calls, mobile, DNS, analytics, redirects, Search Console, and backups."

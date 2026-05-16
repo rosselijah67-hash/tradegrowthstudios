@@ -5,6 +5,11 @@ users:
     allowed_states:
     - '*'
     password_hash_env: AUTH_ADMIN_PASSWORD_HASH
+    permissions:
+      quotes: true
+      run_jobs: true
+      outbound: true
+      send: true
   AG:
     role: user
     display_name: Austin
@@ -12,6 +17,11 @@ users:
     - GA
     - IL
     password_hash_env: AUTH_AG_PASSWORD_HASH
+    permissions:
+      quotes: true
+      run_jobs: true
+      outbound: true
+      send: true
   JOSHGETSMONEY:
     role: user
     display_name: Joshua
@@ -19,6 +29,11 @@ users:
     - CO
     - MI
     password_hash_env: AUTH_JOSHGETSMONEY_PASSWORD_HASH
+    permissions:
+      quotes: true
+      run_jobs: true
+      outbound: true
+      send: true
   JROSS:
     role: user
     display_name: Josiah
@@ -26,6 +41,11 @@ users:
     - IN
     - TN
     password_hash_env: AUTH_JROSS_PASSWORD_HASH
+    permissions:
+      quotes: true
+      run_jobs: true
+      outbound: true
+      send: true
   QWHITE:
     role: user
     display_name: Quinten
@@ -34,3 +54,8 @@ users:
     - OH
     - TX
     password_hash_env: AUTH_QWHITE_PASSWORD_HASH
+    permissions:
+      quotes: true
+      run_jobs: true
+      outbound: true
+      send: true

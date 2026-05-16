@@ -40,7 +40,9 @@
           <th>Website</th>
           <th>Status</th>
           <th>Next Action</th>
+          {% if dashboard_permissions.quotes %}
           <th>Quote</th>
+          {% endif %}
           <th>Updated</th>
           <th>Case</th>
         </tr>
@@ -60,6 +62,7 @@
             </td>
             <td>{{ prospect.status or "" }}</td>
             <td>{{ prospect.next_action or "" }}</td>
+            {% if dashboard_permissions.quotes %}
             <td>
               {% if prospect.quote_count %}
               <span class="crm-quote-cell">
@@ -72,12 +75,13 @@
               <span class="muted">No quote</span>
               {% endif %}
             </td>
+            {% endif %}
             <td>{{ prospect.updated_at or "" }}</td>
             <td><a class="table-action" href="{{ url_for('case_file', prospect_id=prospect.id) }}">Open</a></td>
           </tr>
         {% else %}
           <tr>
-            <td colspan="10" class="empty">No prospects in this CRM stage.</td>
+            <td colspan="{{ 10 if dashboard_permissions.quotes else 9 }}" class="empty">No prospects in this CRM stage.</td>
           </tr>
         {% endfor %}
       </tbody>

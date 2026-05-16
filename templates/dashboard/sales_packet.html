@@ -234,6 +234,7 @@
 
 <section class="packet-grid">
   <form class="panel crm-stage-form" method="post" action="{{ url_for('save_sales_packet_notes', prospect_id=prospect.id) }}">
+    {{ csrf_input() }}
     <div class="panel-header">
       <h2>Sales Notes</h2>
     </div>
@@ -251,6 +252,7 @@
     <div class="review-actions">
       {% if prospect.pipeline_stage != "PROPOSAL_SENT" and prospect.pipeline_stage != "CLOSED_WON" %}
         <form method="post" action="{{ url_for('update_case_stage', prospect_id=prospect.id) }}">
+    {{ csrf_input() }}
           <input type="hidden" name="new_status" value="PROPOSAL_SENT">
           <input type="hidden" name="stage_note" value="Marked proposal sent from sales packet.">
           <input type="hidden" name="return_to" value="sales_packet">
@@ -259,6 +261,7 @@
       {% endif %}
       {% if prospect.pipeline_stage != "CLOSED_WON" %}
         <form method="post" action="{{ url_for('update_case_stage', prospect_id=prospect.id) }}">
+    {{ csrf_input() }}
           <input type="hidden" name="new_status" value="CLOSED_WON">
           <input type="hidden" name="stage_note" value="Marked closed won from sales packet.">
           <input type="hidden" name="return_to" value="sales_packet">
@@ -266,6 +269,7 @@
         </form>
       {% endif %}
       <form method="post" action="{{ url_for('update_case_stage', prospect_id=prospect.id) }}">
+    {{ csrf_input() }}
         <input type="hidden" name="new_status" value="CLOSED_LOST">
         <input type="hidden" name="stage_note" value="Marked closed lost from sales packet.">
         <button class="button danger" type="submit">Mark Closed Lost</button>

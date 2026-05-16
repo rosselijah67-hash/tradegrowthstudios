@@ -18,6 +18,7 @@
   {% for job_type, job in job_types.items() %}
     {% set market_required = job_type == "places_pull" or dashboard_current_user.role != "admin" %}
     <form class="panel pipeline-job-card" method="post" action="{{ url_for('start_dashboard_job') }}">
+    {{ csrf_input() }}
       <input type="hidden" name="job_type" value="{{ job_type }}">
       <div class="panel-header">
         <div>

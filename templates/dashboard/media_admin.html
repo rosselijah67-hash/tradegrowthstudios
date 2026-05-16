@@ -34,6 +34,7 @@
 
   {% if import_enabled %}
   <form class="send-form" method="post" action="{{ url_for('media_import') }}" enctype="multipart/form-data">
+    {{ csrf_input() }}
     <label>
       <span>Media zip file</span>
       <input type="file" name="media_file" accept=".zip" required>

@@ -15,14 +15,23 @@
     <nav class="nav-links" aria-label="Primary navigation">
       <a href="{{ url_for('overview') }}" class="{% if active_page == 'overview' %}active{% endif %}">Overview</a>
       <a href="{{ url_for('markets') }}" class="{% if active_page == 'markets' %}active{% endif %}">Markets</a>
+      {% if dashboard_permissions.run_jobs %}
       <a href="{{ url_for('run_controls') }}" class="{% if active_page == 'run' %}active{% endif %}">Run</a>
       <a href="{{ url_for('jobs') }}" class="{% if active_page == 'jobs' %}active{% endif %}">Jobs</a>
+      {% endif %}
       <a href="{{ url_for('leads') }}" class="{% if active_page == 'leads' %}active{% endif %}">Leads</a>
       <a href="{{ url_for('review_queue') }}" class="{% if active_page == 'review' %}active{% endif %}">Review</a>
       <a href="{{ url_for('crm') }}" class="{% if active_page == 'crm' %}active{% endif %}">CRM</a>
+      <a href="{{ url_for('tasks_board') }}" class="{% if active_page == 'tasks' %}active{% endif %}">Tasks</a>
+      {% if dashboard_permissions.quotes %}
       <a href="{{ url_for('quotes_list') }}" class="{% if active_page == 'quotes' %}active{% endif %}">Quotes</a>
+      {% endif %}
+      {% if dashboard_permissions.outbound %}
       <a href="{{ url_for('outbound') }}" class="{% if active_page == 'outbound' %}active{% endif %}">Outbound</a>
+      {% endif %}
+      {% if dashboard_permissions.send %}
       <a href="{{ url_for('send_page') }}" class="{% if active_page == 'send' %}active{% endif %}">Send</a>
+      {% endif %}
       {% if dashboard_current_user and dashboard_current_user.role == 'admin' %}
       <a href="{{ url_for('admin_home') }}" class="{% if active_page == 'admin' %}active{% endif %}">Admin</a>
       {% endif %}

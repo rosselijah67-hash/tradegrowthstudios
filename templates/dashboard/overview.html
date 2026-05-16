@@ -31,28 +31,41 @@
   </div>
 </form>
 
-<section class="stage-grid" aria-label="Pipeline stage counts">
-  {% for item in stage_counts %}
-    <a class="stage-card" href="{{ url_for('leads', stage=item.stage, market=market_filter.selected) if market_filter.selected else url_for('leads', stage=item.stage) }}">
-      <span class="stage-count">{{ item.count }}</span>
-      <span class="stage-label">{{ item.stage|pretty_label }}</span>
+{% if market_filter.selected and total_prospects == 0 %}
+  <section class="notice overview-empty-state">
+    <span>No active records for this market yet. Use Run to pull leads or select another market.</span>
+    {% if dashboard_permissions.run_jobs %}
+      <a class="button" href="{{ url_for('run_controls', market=market_filter.selected) }}">Run</a>
+    {% endif %}
+  </section>
+{% endif %}
+
+<section class="overview-command-strip" aria-label="High signal overview counts">
+  {% for card in overview_command_cards %}
+    <a class="overview-command-card" href="{{ card.href }}">
+      <span>{{ card.label }}</span>
+      <strong>{{ card.count }}</strong>
     </a>
   {% endfor %}
 </section>
 
-<section class="panel trash-overview">
-  <div>
-    <div class="panel-header">
-      <h2>Trash Can</h2>
-    </div>
-    <p>Rejected, discarded, ineligible, and closed-lost leads stay searchable for cleanup or salvage without mixing into active work.</p>
-  </div>
-  <div class="trash-overview-stats">
-    <span><strong>{{ trash_summary.count }}</strong> trashed</span>
-    <span><strong>{{ trash_summary.media_due }}</strong> media due</span>
-    <span><strong>{{ trash_summary.media_purged }}</strong> media purged</span>
-  </div>
-  <a class="button" href="{{ url_for('trash_can', market=market_filter.selected) if market_filter.selected else url_for('trash_can') }}">Open Trash</a>
+<section class="overview-metric-groups" aria-label="Pipeline metric groups">
+  {% for group in overview_metric_groups %}
+    <details class="overview-metric-group" {% if group.open %}open{% endif %}>
+      <summary>
+        <span>{{ group.label }}</span>
+        <span class="pill">{{ group.total }}</span>
+      </summary>
+      <div class="overview-metric-card-grid">
+        {% for item in group.items %}
+          <a class="overview-metric-card" href="{{ item.href }}">
+            <span>{{ item.label }}</span>
+            <strong>{{ item.count }}</strong>
+          </a>
+        {% endfor %}
+      </div>
+    </details>
+  {% endfor %}
 </section>
 
 <section class="table-panel market-summary-panel">

@@ -8,7 +8,9 @@
     <h1>Send</h1>
     <p>Controlled step-1 sending for queued, approved, draft-ready, public-packet-ready prospects.</p>
   </div>
+  {% if dashboard_permissions.outbound %}
   <a class="button" href="{{ url_for('outbound') }}">Outbound Readiness</a>
+  {% endif %}
 </section>
 
 {% if message %}
@@ -135,6 +137,7 @@
       </div>
     </div>
     <form class="send-form" method="post" action="{{ url_for('send_test_email') }}">
+    {{ csrf_input() }}
       <label>
         <span>Test recipient</span>
         <input type="email" name="test_email" placeholder="you@example.com" required>
@@ -156,6 +159,7 @@
     </div>
   </div>
   <form class="send-batch-form" method="post" action="{{ url_for('send_batch') }}">
+    {{ csrf_input() }}
     <label>
       <span>Batch limit</span>
       <input type="number" name="limit" min="1" max="{{ send_limit_max }}" value="{{ send_limit_default }}">

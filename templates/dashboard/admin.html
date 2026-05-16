@@ -32,6 +32,7 @@
   action="{{ url_for('admin_save_all') }}"
   data-auto-download-url="{% if download_config_after_save %}{{ url_for('admin_download_users_config') }}{% endif %}"
 >
+    {{ csrf_input() }}
   <section class="panel admin-save-panel" aria-live="polite">
     <div>
       <h2>Session Save Required</h2>
@@ -87,6 +88,17 @@
           <span>Password Hash Env</span>
           <input name="new_password_hash_env" placeholder="AUTH_NEWUSER_PASSWORD_HASH">
         </label>
+        <fieldset class="admin-permission-box">
+          <legend>Feature Permissions</legend>
+          <div class="admin-permission-grid">
+            {% for permission in permission_options %}
+              <label class="check-row">
+                <input type="checkbox" name="new_permission_{{ permission.key }}" value="1" checked>
+                <span>{{ permission.label }}</span>
+              </label>
+            {% endfor %}
+          </div>
+        </fieldset>
         <p class="form-help">
           Save All creates the user. If the new user needs territories immediately, list them here first; after save, manage them in the territory table.
         </p>
@@ -148,6 +160,25 @@
               <input name="user_{{ user.username }}_password_hash_env" value="{{ user.password_hash_env }}">
             </label>
           </div>
+          <fieldset class="admin-permission-box">
+            <legend>Feature Permissions</legend>
+            <div class="admin-permission-grid">
+              {% for permission in permission_options %}
+                <label class="check-row">
+                  <input
+                    type="checkbox"
+                    name="user_{{ user.username }}_permission_{{ permission.key }}"
+                    value="1"
+                    {% if user.permissions[permission.key] %}checked{% endif %}
+                  >
+                  <span>{{ permission.label }}</span>
+                </label>
+              {% endfor %}
+            </div>
+            {% if user.role == 'admin' %}
+              <p class="form-help">Admin accounts always keep every feature even if a box is changed.</p>
+            {% endif %}
+          </fieldset>
           <div class="admin-card-stats">
             <span><strong>{{ user.pending_review_count }}</strong> pending review</span>
             <span><strong>{{ user.outreach_drafted_count }}</strong> drafted</span>

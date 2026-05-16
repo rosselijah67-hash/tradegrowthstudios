@@ -19,6 +19,7 @@
       <div class="notice error">{{ error }}</div>
       {% endif %}
       <form class="send-form" method="post" action="{{ url_for('login') }}">
+    {{ csrf_input() }}
         <input type="hidden" name="next" value="{{ next_url }}">
         <label>
           <span>Username</span>

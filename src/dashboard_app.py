@@ -22,15 +22,18 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from email.message import EmailMessage
 from email.utils import formataddr
+from functools import wraps
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
 from flask import Flask, abort, current_app, g, jsonify, make_response, redirect, render_template, request, send_file, session, url_for
 from flask_login import LoginManager, current_user as flask_current_user, login_required, login_user as flask_login_user, logout_user as flask_logout_user
+from markupsafe import Markup, escape
 
 from . import auth as auth_service
 from . import dashboard_jobs, db as pipeline_db, quote_exports, quotes as quote_service, state
+from . import tasks as task_service
 from . import territories
 from .config import (
     PROJECT_ROOT,
@@ -104,6 +107,16 @@ PUBLIC_AUTH_ENDPOINTS = {
     "public_packet_page",
     "public_packet_asset",
 }
+CSRF_SESSION_KEY = "_csrf_token"
+CSRF_FIELD_NAME = "csrf_token"
+CSRF_HEADER_NAMES = ("X-CSRF-Token", "X-CSRFToken")
+CSRF_EXEMPT_ENDPOINTS = {
+    "health",
+    "static",
+    "public_packet_page",
+    "public_packet_asset",
+}
+CSRF_ERROR_MESSAGE = "Security token missing or expired. Refresh the page and try again."
 TRASH_MEDIA_RETENTION_DAYS = 3
 TRASH_STATUSES = ("INELIGIBLE", "REJECTED_REVIEW", "DISCARDED")
 TRASH_QUALIFICATION_STATUSES = ("DISQUALIFIED",)
@@ -177,6 +190,19 @@ CRM_STAGES = list(state.CRM_STAGES)
 CRM_STAGE_LABELS = dict(CRM_STAGES)
 
 CRM_NEXT_ACTIONS = dict(state.CRM_NEXT_ACTIONS)
+
+CRM_BOARD_GROUPS = (
+    ("active_conversation", "Active Conversation", ("CONTACT_MADE", "CALL_BOOKED")),
+    ("proposal", "Proposal", ("PROPOSAL_SENT",)),
+    ("won_lost", "Won/Lost", ("CLOSED_WON", "CLOSED_LOST")),
+    ("project", "Project", ("PROJECT_ACTIVE", "PROJECT_COMPLETE")),
+    ("inactive", "Inactive", ("DISCARDED", "REJECTED_REVIEW")),
+)
+
+CRM_BOARD_STAGE_LABELS = {
+    **CRM_STAGE_LABELS,
+    "REJECTED_REVIEW": "Rejected Review",
+}
 
 SALES_PACKET_STAGES = {"CONTACT_MADE", "CALL_BOOKED", "PROPOSAL_SENT", "CLOSED_WON"}
 QUOTE_MARK_SENT_PROTECTED_STATUSES = {
@@ -328,6 +354,46 @@ VISUAL_REVIEW_CLAIMS = {
         "The route from landing on the site to calling or requesting service is not direct enough."
     ),
 }
+
+
+def generate_csrf_token() -> str:
+    token = secrets.token_urlsafe(32)
+    session[CSRF_SESSION_KEY] = token
+    return token
+
+
+def get_csrf_token() -> str:
+    token = str(session.get(CSRF_SESSION_KEY) or "")
+    if not token:
+        token = generate_csrf_token()
+    return token
+
+
+def validate_csrf_token(token: str | None) -> bool:
+    stored_token = str(session.get(CSRF_SESSION_KEY) or "")
+    submitted_token = str(token or "")
+    return bool(stored_token and submitted_token and secrets.compare_digest(stored_token, submitted_token))
+
+
+def csrf_input() -> Markup:
+    return Markup(
+        f'<input type="hidden" name="{CSRF_FIELD_NAME}" value="{escape(get_csrf_token())}">'
+    )
+
+
+def csrf_token_from_request() -> str | None:
+    token = request.form.get(CSRF_FIELD_NAME)
+    if token:
+        return token
+    for header_name in CSRF_HEADER_NAMES:
+        token = request.headers.get(header_name)
+        if token:
+            return token
+    return None
+
+
+def csrf_failure_response():
+    return make_response(CSRF_ERROR_MESSAGE, 400)
 
 
 def resolve_project_path(path: str | Path | None) -> Path | None:
@@ -535,6 +601,31 @@ def current_dashboard_user() -> auth_service.User | None:
 
 def dashboard_user_is_admin(user: auth_service.User | None = None) -> bool:
     return auth_service.is_admin(user if user is not None else current_dashboard_user())
+
+
+def dashboard_permission_map(user: auth_service.User | None = None) -> dict[str, bool]:
+    user = user if user is not None else current_dashboard_user()
+    return {
+        key: auth_service.user_has_permission(user, key)
+        for key in auth_service.USER_PERMISSION_KEYS
+    }
+
+
+def dashboard_user_has_permission(permission_key: str, user: auth_service.User | None = None) -> bool:
+    return auth_service.user_has_permission(user if user is not None else current_dashboard_user(), permission_key)
+
+
+def require_dashboard_permission(permission_key: str):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            if not dashboard_user_has_permission(permission_key):
+                abort(403)
+            return func(*args, **kwargs)
+
+        return wrapper
+
+    return decorator
 
 
 def current_user_allowed_states(
@@ -878,6 +969,7 @@ def admin_user_diagnostics() -> list[dict[str, Any]]:
             "allowed_states_input": "" if "*" in user.allowed_states else ", ".join(user.allowed_states),
             "password_hash_env": user.password_hash_env,
             "password_hash_present": user.can_login,
+            "permissions": dashboard_permission_map(user),
             "owned_market_count": admin_owned_market_count(user, markets),
             **admin_user_prospect_counts(user),
         }
@@ -990,6 +1082,7 @@ def build_admin_user_details(
     role: Any,
     allowed_states: Any,
     password_hash_env: Any,
+    permissions: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     username = normalize_admin_username(username)
     display_name = str(display_name or username).strip() or username
@@ -1012,11 +1105,23 @@ def build_admin_user_details(
             if state_code != "*"
         ]
 
+    normalized_permissions = dict(auth_service.DEFAULT_USER_PERMISSIONS)
+    if permissions is not None:
+        normalized_permissions.update(
+            {
+                key: bool(permissions.get(key))
+                for key in auth_service.USER_PERMISSION_KEYS
+            }
+        )
+    if role == "admin":
+        normalized_permissions = dict(auth_service.DEFAULT_USER_PERMISSIONS)
+
     return {
         "role": role,
         "display_name": display_name,
         "allowed_states": allowed_states,
         "password_hash_env": password_hash_env,
+        "permissions": normalized_permissions,
     }
 
 
@@ -1028,7 +1133,17 @@ def parse_admin_user_form(form: Any, *, existing_username: str | None = None) ->
         role=form.get("role"),
         allowed_states=form.get("allowed_states"),
         password_hash_env=form.get("password_hash_env"),
+        permissions=admin_permissions_from_form(form, "permission", force=False),
     )
+
+
+def admin_permissions_from_form(form: Any, prefix: str, *, force: bool = True) -> dict[str, bool] | None:
+    if not force and not any(f"{prefix}_{key}" in form for key in auth_service.USER_PERMISSION_KEYS):
+        return None
+    return {
+        key: str(form.get(f"{prefix}_{key}") or "").strip() == "1"
+        for key in auth_service.USER_PERMISSION_KEYS
+    }
 
 
 def validate_admin_users_document(data: dict[str, Any]) -> dict[str, Any]:
@@ -1058,11 +1173,22 @@ def validate_admin_users_document(data: dict[str, Any]) -> dict[str, Any]:
             password_hash_env = default_password_hash_env(username)
         if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,80}", password_hash_env):
             raise ValueError(f"User {username} has invalid password hash env var.")
+        permissions = dict(auth_service.DEFAULT_USER_PERMISSIONS)
+        raw_permissions = raw_user.get("permissions")
+        if isinstance(raw_permissions, dict):
+            for key in auth_service.USER_PERMISSION_KEYS:
+                if key in raw_permissions:
+                    permissions[key] = bool(raw_permissions.get(key))
+        elif raw_permissions is not None:
+            raise ValueError(f"User {username} permissions must be a mapping.")
+        if role == "admin":
+            permissions = dict(auth_service.DEFAULT_USER_PERMISSIONS)
         normalized["users"][username] = {
             "role": role,
             "display_name": str(raw_user.get("display_name") or username).strip() or username,
             "allowed_states": allowed_states,
             "password_hash_env": password_hash_env,
+            "permissions": permissions,
         }
     if admin_count < 1:
         raise ValueError("At least one admin user is required.")
@@ -1103,6 +1229,7 @@ def build_admin_save_all_document(form: Any) -> tuple[dict[str, Any], str | None
             role=form.get(f"user_{username}_role"),
             allowed_states=current_user.get("allowed_states"),
             password_hash_env=form.get(f"user_{username}_password_hash_env"),
+            permissions=admin_permissions_from_form(form, f"user_{username}_permission"),
         )
         if user_details["role"] != "admin":
             user_details["allowed_states"] = []
@@ -1120,6 +1247,7 @@ def build_admin_save_all_document(form: Any) -> tuple[dict[str, Any], str | None
             role=form.get("new_role"),
             allowed_states=form.get("new_allowed_states"),
             password_hash_env=form.get("new_password_hash_env"),
+            permissions=admin_permissions_from_form(form, "new_permission"),
         )
         updated["users"][new_username] = new_details
 
@@ -2560,6 +2688,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     dashboard_jobs.ensure_schema(app.config["DATABASE_PATH"])
     ensure_outreach_queue_schema(app.config["DATABASE_PATH"])
     pipeline_db.ensure_quote_schema_for_path(app.config["DATABASE_PATH"])
+    task_service.ensure_schema(app.config["DATABASE_PATH"])
     dashboard_jobs.mark_stale_jobs(app.config["DATABASE_PATH"])
 
     @app.teardown_appcontext
@@ -2590,13 +2719,27 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     @app.context_processor
     def auth_template_context() -> dict[str, Any]:
         dashboard_current_user = auth_service.current_app_user()
+        permissions = dashboard_permission_map(dashboard_current_user)
         return {
             "dashboard_auth_enabled": app.config["DASHBOARD_AUTH_ENABLED"],
             "dashboard_current_user": dashboard_current_user,
             "dashboard_user": dashboard_current_user.username if dashboard_current_user else "",
             "dashboard_role": dashboard_current_user.role if dashboard_current_user else "",
             "dashboard_allowed_states_summary": dashboard_allowed_states_summary(dashboard_current_user),
+            "dashboard_permissions": permissions,
+            "csrf_token": get_csrf_token,
+            "csrf_input": csrf_input,
         }
+
+    @app.before_request
+    def validate_dashboard_csrf():
+        if request.method in {"GET", "HEAD", "OPTIONS"}:
+            return None
+        if request.endpoint in CSRF_EXEMPT_ENDPOINTS:
+            return None
+        if validate_csrf_token(csrf_token_from_request()):
+            return None
+        return csrf_failure_response()
 
     @app.before_request
     def require_dashboard_login():
@@ -2621,6 +2764,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
                 if user is not None:
                     session.clear()
                     session.permanent = True
+                    generate_csrf_token()
                     flask_login_user(user)
                     session["user_id"] = user.username
                     session["role"] = user.role
@@ -2677,6 +2821,10 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             hash_generator_path=PROJECT_ROOT / "generate_user_password_hash.bat",
             message=admin_result_message(),
             download_config_after_save=request.args.get("download_config") == "1",
+            permission_options=[
+                {"key": key, "label": auth_service.USER_PERMISSION_LABELS[key]}
+                for key in auth_service.USER_PERMISSION_KEYS
+            ],
         )
 
     @app.get("/admin/users-config/download")
@@ -2945,6 +3093,8 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             allow_unknown_for_admin=True,
         )
         stage_counts = load_stage_counts(selected_market)
+        trash_summary = load_trash_summary(selected_market)
+        open_task_count = load_overview_open_task_count(selected_market)
         total_prospects = sum(item["count"] for item in stage_counts)
         top_markets = load_group_counts("market", market=selected_market)
         top_niches = load_group_counts("niche", market=selected_market)
@@ -2960,11 +3110,22 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             market_filter=market_filter_context(selected_market),
             message=message,
             stage_counts=stage_counts,
+            overview_command_cards=overview_command_cards(
+                stage_counts,
+                trash_summary=trash_summary,
+                selected_market=selected_market,
+                open_task_count=open_task_count,
+            ),
+            overview_metric_groups=overview_metric_groups(
+                stage_counts,
+                trash_summary=trash_summary,
+                selected_market=selected_market,
+            ),
             total_prospects=total_prospects,
             top_markets=top_markets,
             top_niches=top_niches,
             market_summary=load_market_summary_rows(selected_market),
-            trash_summary=load_trash_summary(selected_market),
+            trash_summary=trash_summary,
         )
 
     @app.get("/review")
@@ -3086,16 +3247,111 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     @app.get("/crm")
     def crm() -> str:
         selected_market = selected_market_from_request()
-        columns = load_crm_columns(selected_market)
+        groups = load_crm_groups(selected_market)
         return render_template(
             "dashboard/crm.html",
             active_page="crm",
             market_filter=market_filter_context(selected_market),
-            columns=columns,
+            groups=groups,
             stages=CRM_STAGES,
         )
 
+    @app.get("/tasks")
+    def tasks_board() -> str:
+        filters = task_filters_from_request()
+        task_rows = load_global_tasks(filters)
+        summary_rows = load_global_tasks({**filters, "status": "", "due_bucket": ""})
+        return render_template(
+            "dashboard/tasks.html",
+            active_page="tasks",
+            filters=filters,
+            market_options=build_market_options(filters["market"]),
+            task_type_options=task_service.TASK_TYPE_OPTIONS,
+            task_priority_options=task_service.TASK_PRIORITY_OPTIONS,
+            task_status_options=task_service.TASK_STATUS_OPTIONS,
+            due_bucket_options=task_due_bucket_options(),
+            summary=task_summary(summary_rows),
+            grouped_tasks=group_tasks_for_display(task_rows),
+            message=task_message_from_code(request.args.get("result")),
+        )
+
+    @app.get("/tasks/<int:task_id>")
+    def task_detail(task_id: int) -> str:
+        task = require_task_access(task_id)
+        return render_template(
+            "dashboard/task_detail.html",
+            active_page="tasks",
+            task=task,
+            contacts=load_contacts(int(task["prospect_id"])),
+            task_type_options=task_service.TASK_TYPE_OPTIONS,
+            task_priority_options=task_service.TASK_PRIORITY_OPTIONS,
+            task_status_options=task_service.TASK_STATUS_OPTIONS,
+            message=task_message_from_code(request.args.get("result")),
+        )
+
+    @app.post("/tasks/<int:task_id>/update")
+    def update_task(task_id: int):
+        task = require_task_access(task_id)
+        try:
+            contact_id = parse_optional_int(request.form.get("contact_id"))
+            contact_snapshot = task_contact_snapshot(int(task["prospect_id"]), contact_id, request.form)
+            task_service.update_task(
+                get_connection(),
+                task_id,
+                task_type=request.form.get("task_type"),
+                title=request.form.get("title"),
+                priority=request.form.get("priority"),
+                status=request.form.get("status"),
+                due_date=request.form.get("due_date"),
+                due_time=request.form.get("due_time"),
+                assigned_to=request.form.get("assigned_to"),
+                contact_id=contact_snapshot["contact_id"],
+                contact_name=contact_snapshot["contact_name"],
+                contact_email=contact_snapshot["contact_email"],
+                contact_phone=contact_snapshot["contact_phone"],
+                notes=request.form.get("notes"),
+                outcome_notes=request.form.get("outcome_notes"),
+            )
+        except ValueError as exc:
+            return redirect(url_for("task_detail", task_id=task_id, result=f"error:{exc}"))
+        get_connection().commit()
+        return redirect_after_task_action(task, "updated")
+
+    @app.post("/tasks/<int:task_id>/complete")
+    def complete_task(task_id: int):
+        task = require_task_access(task_id)
+        task_service.complete_task(
+            get_connection(),
+            task_id,
+            outcome_notes=request.form.get("outcome_notes"),
+        )
+        get_connection().commit()
+        return redirect_after_task_action(task, "completed")
+
+    @app.post("/tasks/<int:task_id>/cancel")
+    def cancel_task(task_id: int):
+        task = require_task_access(task_id)
+        task_service.cancel_task(
+            get_connection(),
+            task_id,
+            outcome_notes=request.form.get("outcome_notes"),
+        )
+        get_connection().commit()
+        return redirect_after_task_action(task, "cancelled")
+
+    @app.post("/tasks/<int:task_id>/snooze")
+    def snooze_task(task_id: int):
+        task = require_task_access(task_id)
+        snooze_until = request.form.get("snooze_until") or request.form.get("quick_snooze")
+        try:
+            task_service.snooze_task(get_connection(), task_id, snooze_until=snooze_until)
+        except ValueError as exc:
+            return redirect(url_for("task_detail", task_id=task_id, result=f"error:{exc}"))
+        get_connection().commit()
+        return redirect_after_task_action(task, "snoozed")
+
     @app.get("/outbound")
+    @require_dashboard_permission("outbound")
     def outbound() -> str:
         filters = outbound_filters_from_request()
         readiness = load_outbound_readiness(filters)
@@ -3115,6 +3371,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         )
 
     @app.post("/outbound/queue")
+    @require_dashboard_permission("outbound")
     def create_outbound_queue():
         filters = outbound_filters_from_request(source=request.form)
         limit = parse_outbound_queue_limit(request.form.get("queue_limit"))
@@ -3125,6 +3382,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         return redirect(outbound_url(filters, result=f"queued:{created}:{skipped}"))
 
     @app.get("/send")
+    @require_dashboard_permission("send")
     def send_page() -> str:
         send_state = load_send_dashboard_state()
         return render_template(
@@ -3147,6 +3405,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     @app.post("/send/test")
     @login_required
     @auth_service.admin_required
+    @require_dashboard_permission("send")
     def send_test_email():
         if request.form.get("confirm_test") != "1":
             return redirect(url_for("send_page", result="error:Confirm the test send first."))
@@ -3170,6 +3429,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         return redirect(url_for("send_page", result="test_sent"))
 
     @app.post("/send/batch")
+    @require_dashboard_permission("send")
     def send_batch():
         if request.form.get("confirm_send") != "1":
             return redirect(url_for("send_page", result="error:Confirm the real send first. No email was sent."))
@@ -3185,6 +3445,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         return redirect(url_for("send_page", result=code))
 
     @app.get("/quotes")
+    @require_dashboard_permission("quotes")
     def quotes_list() -> str:
         return render_template(
             "dashboard/quotes_list.html",
@@ -3194,6 +3455,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         )
 
     @app.get("/quotes/new")
+    @require_dashboard_permission("quotes")
     def new_quote() -> str:
         try:
             prospect_id = parse_optional_int(request.args.get("prospect_id"))
@@ -3217,6 +3479,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         )
 
     @app.post("/quotes/new")
+    @require_dashboard_permission("quotes")
     def create_quote():
         try:
             prospect_id = parse_optional_int(request.form.get("prospect_id"))
@@ -3261,6 +3524,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         return redirect(url_for("quote_detail", quote_id=quote["id"]))
 
     @app.get("/quotes/<int:quote_id>")
+    @require_dashboard_permission("quotes")
     def quote_detail(quote_id: int) -> str:
         quote, prospect = require_quote_access(quote_id)
         return render_template(
@@ -3272,6 +3536,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         )
 
     @app.get("/quotes/<int:quote_id>/edit")
+    @require_dashboard_permission("quotes")
     def edit_quote(quote_id: int) -> str:
         quote, prospect = require_quote_access(quote_id)
         contacts = load_contacts(int(prospect["id"]))
@@ -3290,6 +3555,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         )
 
     @app.post("/quotes/<int:quote_id>/edit")
+    @require_dashboard_permission("quotes")
     def update_quote(quote_id: int):
         connection = get_connection()
         quote, prospect = require_quote_access(quote_id)
@@ -3328,6 +3594,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         return redirect(url_for("quote_detail", quote_id=quote_id, result="saved"))
 
     @app.get("/quotes/<int:quote_id>/export/text")
+    @require_dashboard_permission("quotes")
     def quote_export_text(quote_id: int):
         connection = get_connection()
         quote, prospect = require_quote_access(quote_id)
@@ -3343,10 +3610,12 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         return current_app.response_class(text, content_type="text/plain; charset=utf-8")
 
     @app.get("/quotes/<int:quote_id>/export.txt")
+    @require_dashboard_permission("quotes")
     def quote_export_text_legacy(quote_id: int):
         return redirect(url_for("quote_export_text", quote_id=quote_id))
 
     @app.get("/quotes/<int:quote_id>/export/html")
+    @require_dashboard_permission("quotes")
     def quote_export_html(quote_id: int):
         connection = get_connection()
         quote, prospect = require_quote_access(quote_id)
@@ -3363,10 +3632,12 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         return current_app.response_class(html, content_type="text/html; charset=utf-8")
 
     @app.get("/quotes/<int:quote_id>/print")
+    @require_dashboard_permission("quotes")
     def quote_printable(quote_id: int):
         return redirect(url_for("quote_export_html", quote_id=quote_id))
 
     @app.post("/quotes/<int:quote_id>/status")
+    @require_dashboard_permission("quotes")
     def update_quote_status(quote_id: int):
         require_quote_access(quote_id)
         status = str(request.form.get("status") or "").strip().lower()
@@ -3386,6 +3657,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         return redirect(url_for("quote_detail", quote_id=quote_id, result=f"status:{status}"))
 
     @app.post("/quotes/<int:quote_id>/mark-sent")
+    @require_dashboard_permission("quotes")
     def mark_quote_sent(quote_id: int):
         require_quote_access(quote_id)
         try:
@@ -3400,6 +3672,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         return redirect(url_for("quote_detail", quote_id=quote_id, result="status:sent"))
 
     @app.post("/quotes/<int:quote_id>/mark-accepted")
+    @require_dashboard_permission("quotes")
     def mark_quote_accepted(quote_id: int):
         require_quote_access(quote_id)
         try:
@@ -3414,6 +3687,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         return redirect(url_for("quote_detail", quote_id=quote_id, result="status:accepted"))
 
     @app.post("/quotes/<int:quote_id>/mark-declined")
+    @require_dashboard_permission("quotes")
     def mark_quote_declined(quote_id: int):
         require_quote_access(quote_id)
         try:
@@ -3431,6 +3705,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
 
     @app.post("/quotes/<int:quote_id>/create-revision")
     @app.post("/quotes/<int:quote_id>/revision")
+    @require_dashboard_permission("quotes")
     def create_quote_revision(quote_id: int):
         connection = get_connection()
         require_quote_access(quote_id)
@@ -3450,6 +3725,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         return redirect(url_for("quote_detail", quote_id=quote["id"], result="revision_created"))
 
     @app.post("/quotes/<int:quote_id>/delete")
+    @require_dashboard_permission("quotes")
     def delete_quote(quote_id: int):
         if request.form.get("confirm_delete") != "1":
             abort(400)
@@ -3473,7 +3749,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     @app.get("/crm/stage/<stage>")
     def crm_stage(stage: str) -> str:
         normalized_stage = _normalize_token(stage)
-        if normalized_stage not in CRM_STAGE_LABELS:
+        if normalized_stage not in CRM_BOARD_STAGE_LABELS:
             abort(404)
         selected_market = selected_market_from_request()
         prospects = load_crm_stage_prospects(
@@ -3485,7 +3761,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             "dashboard/crm_stage.html",
             active_page="crm",
             stage=normalized_stage,
-            stage_label=CRM_STAGE_LABELS[normalized_stage],
+            stage_label=CRM_BOARD_STAGE_LABELS[normalized_stage],
             market_filter=market_filter_context(selected_market),
             prospects=prospects,
             stages=CRM_STAGES,
@@ -3500,6 +3776,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         artifacts = load_artifacts(prospect_id)
         audits = load_audits(prospect_id)
         contacts = load_contacts(prospect_id)
+        case_tasks = load_case_tasks(prospect_id)
         primary_contact = primary_contact_from_contacts(contacts)
         packet = build_sales_packet(
             prospect=prospect,
@@ -3528,6 +3805,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         return redirect(url_for("sales_packet", prospect_id=prospect_id, result="notes_saved"))
 
     @app.get("/pipeline")
+    @require_dashboard_permission("run_jobs")
     def pipeline() -> str:
         selected_market = selected_market_from_request()
         if selected_market:
@@ -3535,6 +3813,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         return redirect(url_for("run_controls"))
 
     @app.get("/run")
+    @require_dashboard_permission("run_jobs")
     def run_controls() -> str:
         selected_market, territory_error = normalize_selected_market_for_user(
             selected_market_from_request(),
@@ -3572,6 +3851,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         )
 
     @app.post("/run/full-pipeline")
+    @require_dashboard_permission("run_jobs")
     def start_full_market_pipeline():
         try:
             job_key = start_full_pipeline_from_form(request.form)
@@ -3580,6 +3860,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         return redirect(url_for("job_detail", job_key=job_key))
 
     @app.get("/jobs")
+    @require_dashboard_permission("run_jobs")
     def jobs() -> str:
         selected_market, territory_error = normalize_selected_market_for_user(
             selected_market_from_request(),
@@ -3608,6 +3889,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         )
 
     @app.get("/jobs/<job_key>")
+    @require_dashboard_permission("run_jobs")
     def job_detail(job_key: str) -> str:
         job = dashboard_jobs.get_job(job_key, db_path=app.config["DATABASE_PATH"])
         if job is None:
@@ -3629,6 +3911,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         )
 
     @app.post("/jobs/start")
+    @require_dashboard_permission("run_jobs")
     def start_dashboard_job():
         try:
             job_key = start_job_from_form(request.form)
@@ -3639,6 +3922,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         return redirect(url_for("job_detail", job_key=job_key))
 
     @app.get("/jobs/<job_key>/status")
+    @require_dashboard_permission("run_jobs")
     def job_status(job_key: str):
         job = dashboard_jobs.get_job(job_key, db_path=app.config["DATABASE_PATH"])
         if job is None:
@@ -3666,6 +3950,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         )
 
     @app.post("/pipeline/run")
+    @require_dashboard_permission("run_jobs")
     def run_pipeline_job():
         return redirect(
             run_controls_url_from_form(
@@ -3746,6 +4031,10 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             public_packet_status=public_packet_status,
             contacts=contacts,
             primary_contact=primary_contact,
+            task_context=case_tasks,
+            task_type_options=task_service.TASK_TYPE_OPTIONS,
+            task_priority_options=task_service.TASK_PRIORITY_OPTIONS,
+            highlight_task_id=str(request.args.get("task") or ""),
             stage_history=stage_history,
             crm_stages=CRM_STAGES,
             audits=audits,
@@ -3856,6 +4145,46 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         )
         connection.commit()
         return redirect(url_for("case_file", prospect_id=prospect_id, review="contact_saved"))
+
+    @app.post("/case/<int:prospect_id>/tasks/create")
+    def create_case_task(prospect_id: int):
+        prospect = require_prospect_access(prospect_id)
+        actor = current_dashboard_user()
+        try:
+            contact_id = parse_optional_int(request.form.get("contact_id"))
+            quote_id = parse_optional_int(request.form.get("quote_id"))
+            contact_snapshot = task_contact_snapshot(prospect_id, contact_id, request.form)
+            connection = get_connection()
+            quote_id = task_quote_id_for_prospect(connection, prospect_id, quote_id)
+            task_id = task_service.create_task(
+                connection,
+                prospect_id=prospect_id,
+                quote_id=quote_id,
+                task_type=request.form.get("task_type"),
+                title=request.form.get("title"),
+                priority=request.form.get("priority"),
+                due_date=request.form.get("due_date"),
+                due_time=request.form.get("due_time"),
+                assigned_to=request.form.get("assigned_to"),
+                contact_id=contact_snapshot["contact_id"],
+                contact_name=contact_snapshot["contact_name"],
+                contact_email=contact_snapshot["contact_email"],
+                contact_phone=contact_snapshot["contact_phone"],
+                notes=request.form.get("notes"),
+                created_by_user=actor.username if actor else None,
+                owner_username=prospect.get("owner_username") or (actor.username if actor else None),
+                market_state=prospect_state_from_record(prospect),
+            )
+        except ValueError as exc:
+            return redirect(
+                url_for(
+                    "case_file",
+                    prospect_id=prospect_id,
+                    review=f"task_error:{exc}",
+                )
+            )
+        connection.commit()
+        return redirect(url_for("case_file", prospect_id=prospect_id, review="task_created", task=task_id))
 
     @app.post("/case/<int:prospect_id>/visual-review")
     def record_visual_review(prospect_id: int):
@@ -4015,6 +4344,199 @@ def load_stage_counts(market: str = "") -> list[dict[str, Any]]:
         stage = compute_pipeline_stage(row)
         counts[stage] = counts.get(stage, 0) + 1
     return [{"stage": stage, "count": counts.get(stage, 0)} for stage in PIPELINE_STAGE_BUCKETS]
+
+
+def overview_stage_count_map(stage_counts: list[dict[str, Any]]) -> dict[str, int]:
+    return {
+        str(item.get("stage") or ""): int(item.get("count") or 0)
+        for item in stage_counts
+    }
+
+
+def overview_stage_total(counts: dict[str, int], *stages: str) -> int:
+    return sum(counts.get(stage, 0) for stage in stages)
+
+
+def overview_market_args(selected_market: str = "") -> dict[str, str]:
+    return {"market": selected_market} if selected_market else {}
+
+
+def overview_leads_url(stage: str, selected_market: str = "") -> str:
+    return url_for("leads", stage=stage, **overview_market_args(selected_market))
+
+
+def overview_command_cards(
+    stage_counts: list[dict[str, Any]],
+    *,
+    trash_summary: dict[str, Any],
+    selected_market: str,
+    open_task_count: int | None,
+) -> list[dict[str, Any]]:
+    counts = overview_stage_count_map(stage_counts)
+    cards = [
+        {
+            "label": "Eligible for Audit",
+            "count": counts.get("ELIGIBLE_FOR_AUDIT", 0),
+            "href": overview_leads_url("ELIGIBLE_FOR_AUDIT", selected_market),
+        },
+        {
+            "label": "Pending Review",
+            "count": counts.get("PENDING_REVIEW", 0),
+            "href": url_for("review_queue", **overview_market_args(selected_market)),
+        },
+        {
+            "label": "Outbound Ready",
+            "count": counts.get("OUTREACH_DRAFTED", 0),
+            "href": overview_leads_url("OUTREACH_DRAFTED", selected_market),
+        },
+        {
+            "label": "Contact Made / Active Sales",
+            "count": overview_stage_total(
+                counts,
+                "CONTACT_MADE",
+                "CALL_BOOKED",
+                "PROPOSAL_SENT",
+                "CLOSED_WON",
+                "PROJECT_ACTIVE",
+            ),
+            "href": url_for("crm", **overview_market_args(selected_market)),
+        },
+    ]
+    if open_task_count is not None:
+        cards.append(
+            {
+                "label": "Open Tasks",
+                "count": open_task_count,
+                "href": url_for("tasks_board", **overview_market_args(selected_market)),
+            }
+        )
+    cards.append(
+        {
+            "label": "Trash",
+            "count": int(trash_summary.get("count") or 0),
+            "href": url_for("trash_can", **overview_market_args(selected_market)),
+        }
+    )
+    return cards
+
+
+def overview_metric_groups(
+    stage_counts: list[dict[str, Any]],
+    *,
+    trash_summary: dict[str, Any],
+    selected_market: str,
+) -> list[dict[str, Any]]:
+    counts = overview_stage_count_map(stage_counts)
+    grouped_stages: set[str] = set()
+
+    def stage_item(stage: str, label: str) -> dict[str, Any]:
+        grouped_stages.add(stage)
+        return {
+            "key": stage.lower(),
+            "label": label,
+            "count": counts.get(stage, 0),
+            "href": overview_leads_url(stage, selected_market),
+        }
+
+    groups = [
+        {
+            "key": "acquisition",
+            "label": "Acquisition",
+            "items": [
+                stage_item("NEW", "New"),
+                stage_item("NO_WEBSITE", "No Website"),
+                stage_item("ELIGIBLE_FOR_AUDIT", "Eligible for Audit"),
+                stage_item("INELIGIBLE", "Ineligible"),
+                stage_item("DISCARDED", "Discarded"),
+            ],
+        },
+        {
+            "key": "audit_review",
+            "label": "Audit + Review",
+            "items": [
+                stage_item("AUDIT_READY", "Audit Ready"),
+                stage_item("PENDING_REVIEW", "Pending Review"),
+                stage_item("REJECTED_REVIEW", "Rejected Review"),
+            ],
+        },
+        {
+            "key": "outreach",
+            "label": "Outreach",
+            "items": [
+                stage_item("APPROVED_FOR_OUTREACH", "Approved for Outreach"),
+                stage_item("OUTREACH_DRAFTED", "Outreach Drafted"),
+                stage_item("OUTREACH_SENT", "Outreach Sent"),
+                stage_item("CONTACT_MADE", "Contact Made"),
+            ],
+        },
+        {
+            "key": "sales_projects",
+            "label": "Sales + Projects",
+            "items": [
+                stage_item("CALL_BOOKED", "Call Booked"),
+                stage_item("PROPOSAL_SENT", "Proposal Sent"),
+                stage_item("CLOSED_WON", "Closed Won"),
+                stage_item("CLOSED_LOST", "Closed Lost"),
+                stage_item("PROJECT_ACTIVE", "Project Active"),
+                stage_item("PROJECT_COMPLETE", "Project Complete"),
+            ],
+        },
+        {
+            "key": "trash_cleanup",
+            "label": "Trash / Cleanup",
+            "items": [
+                {
+                    "key": "trashed",
+                    "label": "Trashed",
+                    "count": int(trash_summary.get("count") or 0),
+                    "href": url_for("trash_can", **overview_market_args(selected_market)),
+                },
+                {
+                    "key": "media_due",
+                    "label": "Media Due",
+                    "count": int(trash_summary.get("media_due") or 0),
+                    "href": url_for("trash_can", **overview_market_args(selected_market)),
+                },
+                {
+                    "key": "media_purged",
+                    "label": "Media Purged",
+                    "count": int(trash_summary.get("media_purged") or 0),
+                    "href": url_for("trash_can", **overview_market_args(selected_market)),
+                },
+            ],
+        },
+    ]
+    extra_items = [
+        stage_item(item["stage"], item["stage"].replace("_", " ").title())
+        for item in stage_counts
+        if item["stage"] not in grouped_stages
+    ]
+    if extra_items:
+        groups.append({"key": "other", "label": "Other", "items": extra_items})
+    for group in groups:
+        group["total"] = sum(int(item.get("count") or 0) for item in group["items"])
+        group["open"] = group["total"] > 0
+    return groups
+
+
+def load_overview_open_task_count(market: str = "") -> int | None:
+    try:
+        tasks = load_global_tasks(
+            {
+                "status": "",
+                "task_type": "",
+                "priority": "",
+                "market": market,
+                "assigned_to": "",
+                "due_bucket": "",
+                "q": "",
+            }
+        )
+    except sqlite3.OperationalError as exc:
+        if "crm_tasks" in str(exc).lower():
+            return None
+        raise
+    return sum(1 for task in tasks if task.get("status") in task_service.OPEN_STATUSES)
 
 
 def load_pipeline_counts(market: str = "") -> list[dict[str, Any]]:
@@ -4611,10 +5133,71 @@ def load_trash_summary(market: str = "") -> dict[str, Any]:
     }
 
 
-def load_crm_columns(market: str = "", recent_limit: int = 8) -> list[dict[str, Any]]:
-    prospects = load_crm_prospects(market)
+def load_crm_groups(market: str = "", recent_limit: int = 8) -> list[dict[str, Any]]:
+    columns = load_crm_columns(market, recent_limit=recent_limit, include_inactive=True)
+    columns_by_stage = {column["stage"]: column for column in columns}
+    grouped_stages: set[str] = set()
+    groups = []
+    for key, label, stages in CRM_BOARD_GROUPS:
+        stage_columns = []
+        for stage in stages:
+            grouped_stages.add(stage)
+            stage_columns.append(
+                columns_by_stage.get(stage)
+                or empty_crm_column(
+                    stage,
+                    CRM_BOARD_STAGE_LABELS.get(stage, stage.replace("_", " ").title()),
+                    market=market,
+                )
+            )
+        groups.append(
+            {
+                "key": key,
+                "label": label,
+                "count": sum(column["count"] for column in stage_columns),
+                "columns": stage_columns,
+            }
+        )
+
+    other_columns = [
+        column
+        for column in columns
+        if column["stage"] not in grouped_stages and column["count"] > 0
+    ]
+    if other_columns:
+        groups.append(
+            {
+                "key": "other",
+                "label": "Other CRM",
+                "count": sum(column["count"] for column in other_columns),
+                "columns": other_columns,
+            }
+        )
+    return groups
+
+
+def empty_crm_column(stage: str, label: str, *, market: str = "") -> dict[str, Any]:
+    return {
+        "stage": stage,
+        "label": label,
+        "count": 0,
+        "prospects": [],
+        "href": url_for("crm_stage", stage=stage, **overview_market_args(market)),
+    }
+
+
+def load_crm_columns(
+    market: str = "",
+    recent_limit: int = 8,
+    *,
+    include_inactive: bool = False,
+) -> list[dict[str, Any]]:
+    prospects = load_crm_prospects(market, include_inactive=include_inactive)
     columns = []
-    for stage, label in CRM_STAGES:
+    stages = list(CRM_STAGES)
+    if include_inactive and "REJECTED_REVIEW" not in dict(stages):
+        stages.append(("REJECTED_REVIEW", "Rejected Review"))
+    for stage, label in stages:
         stage_prospects = [
             prospect for prospect in prospects
             if prospect["pipeline_stage"] == stage
@@ -4625,6 +5208,7 @@ def load_crm_columns(market: str = "", recent_limit: int = 8) -> list[dict[str, 
                 "label": label,
                 "count": len(stage_prospects),
                 "prospects": stage_prospects[:recent_limit],
+                "href": url_for("crm_stage", stage=stage, **overview_market_args(market)),
             }
         )
     return columns
@@ -4637,17 +5221,21 @@ def load_crm_stage_prospects(
     limit: int = DEFAULT_LIMIT,
 ) -> list[dict[str, Any]]:
     prospects = [
-        prospect for prospect in load_crm_prospects(market)
+        prospect for prospect in load_crm_prospects(
+            market,
+            include_inactive=stage in {"DISCARDED", "REJECTED_REVIEW"},
+        )
         if prospect["pipeline_stage"] == stage
     ]
     return prospects[:limit]
 
 
-def load_crm_prospects(market: str = "") -> list[dict[str, Any]]:
+def load_crm_prospects(market: str = "", *, include_inactive: bool = False) -> list[dict[str, Any]]:
     clauses = ["1 = 1"]
     params: list[Any] = []
     append_visible_market_scope(clauses, params, market)
-    append_active_prospect_filter(clauses, params)
+    if not include_inactive:
+        append_active_prospect_filter(clauses, params)
     rows = get_connection().execute(
         f"""
         SELECT {", ".join(LEADS_COLUMNS)}, updated_at
@@ -4663,6 +5251,7 @@ def load_crm_prospects(market: str = "") -> list[dict[str, Any]]:
         prospect["pipeline_stage"] = compute_pipeline_stage(prospect)
         prospects.append(prospect)
     attach_quote_summaries_to_prospects(prospects)
+    attach_task_summaries_to_prospects(prospects)
     return prospects
 
 
@@ -4704,6 +5293,55 @@ def attach_quote_summaries_to_prospects(prospects: list[dict[str, Any]]) -> None
             prospect["latest_quote_status"] = latest_quote.get("status")
             prospect["latest_quote_amount_cents"] = latest_quote.get("one_time_total_cents")
             prospect["latest_quote_monthly_cents"] = latest_quote.get("recurring_monthly_total_cents")
+
+
+def attach_task_summaries_to_prospects(prospects: list[dict[str, Any]]) -> None:
+    prospects_by_id = {
+        int(prospect["id"]): prospect
+        for prospect in prospects
+        if prospect.get("id") is not None
+    }
+    for prospect in prospects_by_id.values():
+        prospect["open_task_count"] = 0
+        prospect["next_task"] = None
+        prospect["has_overdue_task"] = False
+    if not prospects_by_id:
+        return
+
+    prospect_ids = list(prospects_by_id)
+    status_values = sorted(task_service.OPEN_STATUSES)
+    id_placeholders = ",".join("?" for _ in prospect_ids)
+    status_placeholders = ",".join("?" for _ in status_values)
+    today = datetime.now().date().isoformat()
+    rows = get_connection().execute(
+        f"""
+        SELECT *
+        FROM crm_tasks
+        WHERE prospect_id IN ({id_placeholders})
+          AND status IN ({status_placeholders})
+        ORDER BY
+            CASE
+                WHEN status IN ('open', 'in_progress') AND due_date IS NOT NULL AND due_date < ? THEN 0
+                WHEN status IN ('open', 'in_progress') AND due_date = ? THEN 1
+                WHEN status IN ('open', 'in_progress') THEN 2
+                WHEN status = 'waiting' THEN 3
+                ELSE 4
+            END,
+            COALESCE(due_at, '9999-12-31T23:59:59'),
+            updated_at DESC,
+            id DESC
+        """,
+        [*prospect_ids, *status_values, today, today],
+    ).fetchall()
+    for row in rows:
+        task = enrich_task_row(_row_to_dict(row))
+        prospect = prospects_by_id.get(int(task["prospect_id"]))
+        if prospect is None:
+            continue
+        prospect["open_task_count"] += 1
+        prospect["has_overdue_task"] = bool(prospect["has_overdue_task"] or task["is_overdue"])
+        if prospect["next_task"] is None:
+            prospect["next_task"] = task
 
 
 def list_quotes_for_current_user(limit: int = 200) -> list[dict[str, Any]]:
@@ -4789,6 +5427,578 @@ def primary_contact_from_contacts(contacts: list[dict[str, Any]]) -> dict[str, A
         if metadata.get("primary_email") or metadata.get("is_primary"):
             return contact
     return contacts[0] if contacts else None
+
+
+def task_filters_from_request(source: Any | None = None) -> dict[str, str]:
+    data = source or request.args
+    status = str(data.get("status") or "").strip().lower()
+    raw_task_type = str(data.get("task_type") or "").strip()
+    priority = str(data.get("priority") or "").strip().lower()
+    due_bucket = str(data.get("due_bucket") or "").strip().lower()
+    try:
+        task_type = task_service.normalize_task_type(raw_task_type) if raw_task_type else ""
+    except ValueError:
+        task_type = ""
+    return {
+        "status": status if status in task_service.TASK_STATUS_LABELS else "",
+        "task_type": task_type,
+        "priority": priority if priority in task_service.TASK_PRIORITY_LABELS else "",
+        "market": str(data.get("market") or "").strip(),
+        "assigned_to": str(data.get("assigned_to") or "").strip(),
+        "due_bucket": due_bucket if due_bucket in {"overdue", "today", "upcoming", "waiting", "completed"} else "",
+        "q": str(data.get("q") or "").strip(),
+    }
+
+
+def task_due_bucket_options() -> list[dict[str, str]]:
+    return [
+        {"value": "overdue", "label": "Overdue"},
+        {"value": "today", "label": "Today"},
+        {"value": "upcoming", "label": "Upcoming"},
+        {"value": "waiting", "label": "Waiting"},
+        {"value": "completed", "label": "Completed"},
+    ]
+
+
+def load_global_tasks(filters: dict[str, str]) -> list[dict[str, Any]]:
+    clauses = ["1 = 1"]
+    params: list[Any] = []
+    append_visible_market_scope(clauses, params, filters.get("market", ""))
+    if filters.get("status"):
+        clauses.append("t.status = ?")
+        params.append(filters["status"])
+    if filters.get("task_type"):
+        clauses.append("t.task_type = ?")
+        params.append(filters["task_type"])
+    if filters.get("priority"):
+        clauses.append("t.priority = ?")
+        params.append(filters["priority"])
+    if filters.get("assigned_to"):
+        clauses.append("LOWER(COALESCE(t.assigned_to, '')) = ?")
+        params.append(filters["assigned_to"].lower())
+    append_task_due_bucket_filter(clauses, params, filters.get("due_bucket", ""))
+    q = filters.get("q", "").strip().lower()
+    if q:
+        like = f"%{q}%"
+        clauses.append(
+            "("
+            "LOWER(COALESCE(t.title, '')) LIKE ? OR "
+            "LOWER(COALESCE(t.notes, '')) LIKE ? OR "
+            "LOWER(COALESCE(t.contact_name, '')) LIKE ? OR "
+            "LOWER(COALESCE(t.contact_email, '')) LIKE ? OR "
+            "LOWER(COALESCE(t.contact_phone, '')) LIKE ? OR "
+            "LOWER(COALESCE(prospects.business_name, '')) LIKE ? OR "
+            "LOWER(COALESCE(prospects.market, '')) LIKE ? OR "
+            "LOWER(COALESCE(prospects.niche, '')) LIKE ?"
+            ")"
+        )
+        params.extend([like] * 8)
+    return query_task_rows(clauses, params)
+
+
+def append_task_due_bucket_filter(
+    clauses: list[str],
+    params: list[Any],
+    due_bucket: str,
+) -> None:
+    today = datetime.now().date().isoformat()
+    if due_bucket == "overdue":
+        clauses.append("t.status IN ('open', 'in_progress') AND t.due_date IS NOT NULL AND t.due_date < ?")
+        params.append(today)
+    elif due_bucket == "today":
+        clauses.append("t.status IN ('open', 'in_progress') AND t.due_date = ?")
+        params.append(today)
+    elif due_bucket == "upcoming":
+        clauses.append("t.status IN ('open', 'in_progress') AND (t.due_date IS NULL OR t.due_date > ?)")
+        params.append(today)
+    elif due_bucket == "waiting":
+        clauses.append("t.status = 'waiting'")
+    elif due_bucket == "completed":
+        clauses.append("t.status IN ('done', 'cancelled')")
+
+
+def query_task_rows(clauses: list[str], params: list[Any]) -> list[dict[str, Any]]:
+    today = datetime.now().date().isoformat()
+    rows = get_connection().execute(
+        f"""
+        SELECT t.*,
+               prospects.business_name AS prospect_business_name,
+               prospects.market AS prospect_market,
+               prospects.niche AS prospect_niche,
+               prospects.website_url AS prospect_website_url,
+               quotes.quote_key AS quote_key,
+               quotes.status AS quote_status
+        FROM crm_tasks t
+        JOIN prospects ON prospects.id = t.prospect_id
+        LEFT JOIN quotes ON quotes.id = t.quote_id
+        WHERE {" AND ".join(clauses)}
+        ORDER BY
+            CASE
+                WHEN t.status IN ('open', 'in_progress') AND t.due_date IS NOT NULL AND t.due_date < ? THEN 0
+                WHEN t.status IN ('open', 'in_progress') AND t.due_date = ? THEN 1
+                WHEN t.status IN ('open', 'in_progress') THEN 2
+                WHEN t.status = 'waiting' THEN 3
+                ELSE 4
+            END,
+            COALESCE(t.due_at, '9999-12-31T23:59:59'),
+            t.updated_at DESC,
+            t.id DESC
+        """,
+        [*params, today, today],
+    ).fetchall()
+    return [enrich_task_row(_row_to_dict(row)) for row in rows]
+
+
+def load_case_tasks(prospect_id: int) -> dict[str, Any]:
+    rows = get_connection().execute(
+        """
+        SELECT t.*,
+               p.business_name AS prospect_business_name,
+               p.market AS prospect_market,
+               p.niche AS prospect_niche,
+               q.quote_key AS quote_key,
+               q.status AS quote_status
+        FROM crm_tasks t
+        LEFT JOIN prospects p ON p.id = t.prospect_id
+        LEFT JOIN quotes q ON q.id = t.quote_id
+        WHERE t.prospect_id = ?
+        ORDER BY
+            CASE
+                WHEN t.status IN ('open', 'in_progress') THEN 0
+                WHEN t.status = 'waiting' THEN 1
+                ELSE 2
+            END,
+            COALESCE(t.due_at, '9999-12-31T23:59:59'),
+            t.updated_at DESC,
+            t.id DESC
+        """,
+        (prospect_id,),
+    ).fetchall()
+    tasks = [enrich_task_row(_row_to_dict(row)) for row in rows]
+    open_tasks = [task for task in tasks if task["status"] in {"open", "in_progress"}]
+    waiting_tasks = [task for task in tasks if task["status"] == "waiting"]
+    completed_tasks = [task for task in tasks if task["status"] in task_service.CLOSED_STATUSES]
+    return {
+        "all": tasks,
+        "open": open_tasks,
+        "waiting": waiting_tasks,
+        "completed": completed_tasks,
+        "next": next_task_for_case(open_tasks),
+    }
+
+
+def load_task_with_prospect(task_id: int) -> dict[str, Any] | None:
+    rows = query_task_rows(["t.id = ?"], [task_id])
+    return rows[0] if rows else None
+
+
+def require_task_access(task_id: int) -> dict[str, Any]:
+    task = load_task_with_prospect(task_id)
+    if task is None:
+        abort(404)
+    require_prospect_access(int(task["prospect_id"]))
+    return task
+
+
+def task_contact_snapshot(
+    prospect_id: int,
+    contact_id: int | None,
+    form: Any,
+) -> dict[str, Any]:
+    selected_contact = None
+    if contact_id is not None:
+        selected_contact = next(
+            (contact for contact in load_contacts(prospect_id) if int(contact["id"]) == contact_id),
+            None,
+        )
+    if selected_contact is None:
+        contact_id = None
+    manual_name = str(form.get("contact_name") or "").strip()
+    manual_email = str(form.get("contact_email") or "").strip()
+    manual_phone = str(form.get("contact_phone") or "").strip()
+    return {
+        "contact_id": contact_id,
+        "contact_name": manual_name or (selected_contact or {}).get("name"),
+        "contact_email": manual_email or (selected_contact or {}).get("email"),
+        "contact_phone": manual_phone or (selected_contact or {}).get("phone"),
+    }
+
+
+def task_quote_id_for_prospect(
+    connection: sqlite3.Connection,
+    prospect_id: int,
+    quote_id: int | None,
+) -> int | None:
+    if quote_id is None:
+        return None
+    row = connection.execute(
+        "SELECT id FROM quotes WHERE id = ? AND prospect_id = ?",
+        (quote_id, prospect_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("Quote does not belong to this case.")
+    return int(row["id"])
+
+
+def next_task_for_case(open_tasks: list[dict[str, Any]]) -> dict[str, Any] | None:
+    for bucket in ("overdue", "today", "upcoming"):
+        task = next((item for item in open_tasks if item.get("due_bucket") == bucket), None)
+        if task:
+            return task
+    return open_tasks[0] if open_tasks else None
+
+
+def group_tasks_for_display(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        {"key": "overdue", "label": "Overdue", "tasks": [task for task in tasks if task["due_bucket"] == "overdue"]},
+        {"key": "today", "label": "Due Today", "tasks": [task for task in tasks if task["due_bucket"] == "today"]},
+        {"key": "upcoming", "label": "Upcoming", "tasks": [task for task in tasks if task["due_bucket"] == "upcoming"]},
+        {"key": "waiting", "label": "Waiting", "tasks": [task for task in tasks if task["due_bucket"] == "waiting"]},
+        {"key": "completed", "label": "Completed", "tasks": [task for task in tasks if task["due_bucket"] == "completed"]},
+    ]
+
+
+def task_summary(tasks: list[dict[str, Any]]) -> dict[str, int]:
+    today = datetime.now().date()
+    week_start = today - timedelta(days=today.weekday())
+    summary = {
+        "overdue": 0,
+        "today": 0,
+        "upcoming": 0,
+        "waiting": 0,
+        "done_this_week": 0,
+    }
+    for task in tasks:
+        bucket = task.get("due_bucket")
+        if bucket in {"overdue", "today", "upcoming", "waiting"}:
+            summary[bucket] += 1
+        if task.get("status") == "done":
+            completed_date = task_date(task.get("completed_at"))
+            if completed_date and completed_date >= week_start:
+                summary["done_this_week"] += 1
+    return summary
+
+
+def enrich_task_row(task: dict[str, Any]) -> dict[str, Any]:
+    metadata = parse_json_field(task.get("metadata_json"))
+    task["metadata"] = metadata if isinstance(metadata, dict) else {}
+    task["auto_task_key"] = str(task.get("auto_task_key") or task["metadata"].get("auto_task_key") or "").strip()
+    task["is_auto"] = bool(task["auto_task_key"])
+    task["task_type"] = task_service.normalize_task_type(task.get("task_type"))
+    task["priority"] = task_service.normalize_priority(task.get("priority"))
+    task["status"] = task_service.normalize_status(task.get("status"))
+    task["type_label"] = task_service.TASK_TYPE_LABELS[task["task_type"]]
+    task["priority_label"] = task_service.TASK_PRIORITY_LABELS[task["priority"]]
+    task["status_label"] = task_service.TASK_STATUS_LABELS[task["status"]]
+    task["due_bucket"] = task_due_bucket(task)
+    task["due_label"] = task_due_label(task)
+    task["is_overdue"] = task["due_bucket"] == "overdue"
+    task["is_due_today"] = task["due_bucket"] == "today"
+    task["is_closed"] = task["status"] in task_service.CLOSED_STATUSES
+    return task
+
+
+def create_auto_task_once(
+    connection: sqlite3.Connection,
+    *,
+    prospect: dict[str, Any],
+    auto_task_key: str,
+    task_type: str,
+    title: str,
+    priority: str,
+    due_days: int,
+    notes: str,
+    quote_id: int | None = None,
+    source: str = "crm_automation",
+) -> int | None:
+    prospect_id = int(prospect["id"])
+    if existing_auto_task_id(connection, prospect_id, auto_task_key) is not None:
+        return None
+    actor = current_dashboard_user()
+    due_date = (datetime.now().date() + timedelta(days=due_days)).isoformat()
+    return task_service.create_task(
+        connection,
+        prospect_id=prospect_id,
+        quote_id=quote_id,
+        task_type=task_type,
+        title=title,
+        priority=priority,
+        due_date=due_date,
+        due_time=None,
+        assigned_to=prospect.get("owner_username") or (actor.username if actor else None),
+        created_by_user=actor.username if actor else None,
+        owner_username=prospect.get("owner_username") or (actor.username if actor else None),
+        market_state=prospect_state_from_record(prospect),
+        notes=notes,
+        auto_task_key=auto_task_key,
+        metadata={
+            "auto_created": True,
+            "auto_task_key": auto_task_key,
+            "source": source,
+        },
+    )
+
+
+def existing_auto_task_id(
+    connection: sqlite3.Connection,
+    prospect_id: int,
+    auto_task_key: str,
+) -> int | None:
+    row = connection.execute(
+        """
+        SELECT id
+        FROM crm_tasks
+        WHERE auto_task_key = ?
+          AND status IN ('open', 'in_progress', 'waiting')
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (auto_task_key,),
+    ).fetchone()
+    if row is not None:
+        return int(row["id"])
+
+    rows = connection.execute(
+        """
+        SELECT id, metadata_json
+        FROM crm_tasks
+        WHERE prospect_id = ?
+          AND status IN ('open', 'in_progress', 'waiting')
+        ORDER BY id DESC
+        """,
+        (prospect_id,),
+    ).fetchall()
+    for row in rows:
+        metadata = parse_json_field(row["metadata_json"])
+        if isinstance(metadata, dict) and metadata.get("auto_task_key") == auto_task_key:
+            return int(row["id"])
+    return None
+
+
+def create_stage_auto_tasks(
+    connection: sqlite3.Connection,
+    *,
+    prospect: dict[str, Any],
+    new_status: str,
+    metadata: dict[str, Any] | None = None,
+) -> None:
+    business_name = str(prospect.get("business_name") or "this business")
+    prospect_id = int(prospect["id"])
+    source = str((metadata or {}).get("source") or "crm_stage_change")
+    if new_status == "CONTACT_MADE":
+        create_auto_task_once(
+            connection,
+            prospect=prospect,
+            auto_task_key=f"contact_made_schedule_call:{prospect_id}",
+            task_type="call_scheduled",
+            title=f"Schedule call with {business_name}",
+            priority="high",
+            due_days=0,
+            notes="Prospect made contact. Schedule or confirm call window.",
+            source=source,
+        )
+    elif new_status == "CALL_BOOKED":
+        create_auto_task_once(
+            connection,
+            prospect=prospect,
+            auto_task_key=f"call_booked_prepare_call:{prospect_id}",
+            task_type="call_scheduled",
+            title=f"Prepare for call with {business_name}",
+            priority="high",
+            due_days=0,
+            notes="Review case file, screenshots, visual critique, public packet, and quote options.",
+            source=source,
+        )
+    elif new_status == "CLOSED_WON":
+        create_closed_won_auto_tasks(connection, prospect=prospect, source=source)
+    elif new_status == "PROJECT_ACTIVE":
+        create_auto_task_once(
+            connection,
+            prospect=prospect,
+            auto_task_key=f"project_active_access:{prospect_id}",
+            task_type="client_access_needed",
+            title=f"Collect access for {business_name}",
+            priority="high",
+            due_days=1,
+            notes="Collect the logins and platform access needed to start implementation.",
+            source=source,
+        )
+
+
+def create_closed_won_auto_tasks(
+    connection: sqlite3.Connection,
+    *,
+    prospect: dict[str, Any],
+    source: str,
+) -> None:
+    business_name = str(prospect.get("business_name") or "this business")
+    prospect_id = int(prospect["id"])
+    create_auto_task_once(
+        connection,
+        prospect=prospect,
+        auto_task_key=f"closed_won_project_handoff:{prospect_id}",
+        task_type="contract_deposit",
+        title="Send contract and deposit next step",
+        priority="urgent",
+        due_days=0,
+        notes="Send SOW/payment instructions and collect launch intake.",
+        source=source,
+    )
+    create_auto_task_once(
+        connection,
+        prospect=prospect,
+        auto_task_key=f"closed_won_collect_assets:{prospect_id}",
+        task_type="collect_assets",
+        title=f"Collect website assets from {business_name}",
+        priority="high",
+        due_days=3,
+        notes="Collect launch assets, brand files, photos, copy, access, and any existing site materials.",
+        source=source,
+    )
+
+
+def create_quote_sent_auto_task(
+    connection: sqlite3.Connection,
+    *,
+    prospect: dict[str, Any],
+    quote: dict[str, Any],
+) -> None:
+    business_name = str(prospect.get("business_name") or "this business")
+    create_auto_task_once(
+        connection,
+        prospect=prospect,
+        quote_id=int(quote["id"]),
+        auto_task_key=f"proposal_sent_followup:{int(prospect['id'])}:{int(quote['id'])}",
+        task_type="proposal_follow_up",
+        title=f"Follow up on quote for {business_name}",
+        priority="high",
+        due_days=2,
+        notes="Ask whether they want to move forward, revise scope, or close it out.",
+        source="quote_mark_sent",
+    )
+
+
+def create_outreach_sent_auto_task(
+    connection: sqlite3.Connection,
+    row: dict[str, Any],
+) -> None:
+    prospect = {
+        "id": int(row["prospect_id"]),
+        "business_name": row.get("business_name") or "this business",
+        "owner_username": row.get("owner_username"),
+        "market": row.get("market"),
+        "market_state": row.get("market_state"),
+        "state": row.get("state"),
+        "state_guess": row.get("state_guess"),
+    }
+    business_name = str(prospect["business_name"])
+    step = int(row.get("step") or OUTBOUND_DEFAULT_STEP)
+    create_auto_task_once(
+        connection,
+        prospect=prospect,
+        auto_task_key=f"outreach_sent_followup:{int(prospect['id'])}:{step}",
+        task_type="follow_up",
+        title=f"Check reply / follow up with {business_name}",
+        priority="normal",
+        due_days=3,
+        notes="Do not follow up if they replied, bounced, or unsubscribed.",
+        source="dashboard_send",
+    )
+
+
+def task_due_bucket(task: dict[str, Any]) -> str:
+    status = task_service.normalize_status(task.get("status"))
+    if status == "waiting":
+        return "waiting"
+    if status in task_service.CLOSED_STATUSES:
+        return "completed"
+    due_date = task_date(task.get("due_date"))
+    if due_date is None:
+        return "upcoming"
+    today = datetime.now().date()
+    if due_date < today:
+        return "overdue"
+    if due_date == today:
+        return "today"
+    return "upcoming"
+
+
+def task_due_label(task: dict[str, Any]) -> str:
+    if task.get("status") == "waiting" and task.get("snooze_until"):
+        snooze_label = task_datetime_label(task.get("snooze_until"))
+        return f"Waiting until {snooze_label}" if snooze_label else "Waiting"
+    due_date = task_date(task.get("due_date"))
+    if due_date is None:
+        return "No due date"
+    today = datetime.now().date()
+    if due_date == today:
+        label = "Today"
+    elif due_date == today + timedelta(days=1):
+        label = "Tomorrow"
+    else:
+        label = due_date.isoformat()
+    due_time = str(task.get("due_time") or "").strip()
+    return f"{label} {due_time}" if due_time else label
+
+
+def task_datetime_label(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    due_date = task_date(text)
+    if due_date is None:
+        return text
+    time_match = re.search(r"T(\d{2}:\d{2})", text)
+    time_label = f" {time_match.group(1)}" if time_match else ""
+    today = datetime.now().date()
+    if due_date == today:
+        return f"Today{time_label}"
+    if due_date == today + timedelta(days=1):
+        return f"Tomorrow{time_label}"
+    return f"{due_date.isoformat()}{time_label}"
+
+
+def task_date(value: Any) -> datetime.date | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text[:10]).date()
+    except ValueError:
+        return None
+
+
+def redirect_after_task_action(task: dict[str, Any], result: str):
+    return_to = str(request.form.get("return_to") or "").strip().lower()
+    if return_to == "case":
+        return redirect(
+            url_for(
+                "case_file",
+                prospect_id=int(task["prospect_id"]),
+                review=f"task_{result}",
+                task=int(task["id"]),
+            )
+            + f"#task-{int(task['id'])}"
+        )
+    if return_to == "tasks":
+        return redirect(url_for("tasks_board", result=result))
+    return redirect(url_for("task_detail", task_id=int(task["id"]), result=result))
+
+
+def task_message_from_code(code: str | None) -> dict[str, str] | None:
+    if not code:
+        return None
+    text = str(code)
+    if text.startswith("error:"):
+        return {"status": "error", "message": text.split(":", 1)[1]}
+    messages = {
+        "updated": "Task updated.",
+        "completed": "Task marked done.",
+        "cancelled": "Task cancelled.",
+        "snoozed": "Task snoozed.",
+    }
+    message = messages.get(text)
+    return {"status": "success", "message": message} if message else None
 
 
 def quote_catalog_view(catalog: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -5490,6 +6700,7 @@ def handle_quote_lifecycle_action(
                     "quote_key": quote.get("quote_key"),
                 },
             )
+        create_quote_sent_auto_task(connection, prospect=prospect, quote=quote)
     elif normalized == "accepted":
         apply_crm_stage_change(
             connection,
@@ -5502,6 +6713,7 @@ def handle_quote_lifecycle_action(
                 "quote_key": quote.get("quote_key"),
             },
         )
+        create_closed_won_auto_tasks(connection, prospect=prospect, source="quote_accepted")
     elif normalized == "declined" and close_lost:
         apply_crm_stage_change(
             connection,
@@ -7187,6 +8399,7 @@ def mark_queue_sent(
         metadata=metadata,
         sent_at=now,
     )
+    create_outreach_sent_auto_task(connection, row)
 
 
 def mark_queue_failed(
@@ -7812,6 +9025,8 @@ def list_unique_strings(values: Any) -> list[str]:
 
 
 def review_message_from_code(code: str | None) -> str | None:
+    if code and str(code).startswith("task_error:"):
+        return str(code).split(":", 1)[1]
     messages = {
         "approved": "Approved for outreach.",
         "approved_missing_email": "Approved for outreach. No primary email was saved.",
@@ -7819,6 +9034,11 @@ def review_message_from_code(code: str | None) -> str | None:
         "held": "Held for later review.",
         "stage_updated": "CRM stage updated.",
         "contact_saved": "Primary contact saved.",
+        "task_created": "Task added.",
+        "task_updated": "Task updated.",
+        "task_completed": "Task marked done.",
+        "task_cancelled": "Task cancelled.",
+        "task_snoozed": "Task snoozed.",
         "visual_review_saved": "Visual critique saved.",
         "draft_saved": "Outreach draft saved to the local artifact. No email was sent.",
         "outreach_drafts_generated": (
@@ -8025,6 +9245,12 @@ def apply_crm_stage_change(
         )
     elif new_status not in TRASH_VISIBLE_STATUSES:
         clear_trash_metadata(connection, prospect["id"])
+    create_stage_auto_tasks(
+        connection,
+        prospect=prospect,
+        new_status=new_status,
+        metadata=metadata,
+    )
 
 
 def insert_crm_stage_event(

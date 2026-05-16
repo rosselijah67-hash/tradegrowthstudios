@@ -126,6 +126,7 @@
   </div>
   <p class="warning-text">First live batch should send Step 1 only. Do not automate follow-ups until replies/unsubscribes are stable.</p>
   <form class="outbound-queue-form" method="post" action="{{ url_for('create_outbound_queue') }}">
+    {{ csrf_input() }}
     <input type="hidden" name="market" value="{{ filters.market }}">
     <input type="hidden" name="niche" value="{{ filters.niche }}">
     <label>

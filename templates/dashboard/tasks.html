@@ -1,0 +1,161 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Tasks - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <h1>Tasks</h1>
+    <p>Territory-scoped CRM follow-ups and case work.</p>
+  </div>
+</section>
+
+{% if message %}
+<div class="notice {{ message.status }}">{{ message.message }}</div>
+{% endif %}
+
+<section class="task-summary-grid">
+  <article class="stage-card task-summary-card status-fail">
+    <span class="stage-count">{{ summary.overdue }}</span>
+    <span class="stage-label">Overdue</span>
+  </article>
+  <article class="stage-card task-summary-card status-warn">
+    <span class="stage-count">{{ summary.today }}</span>
+    <span class="stage-label">Today</span>
+  </article>
+  <article class="stage-card task-summary-card">
+    <span class="stage-count">{{ summary.upcoming }}</span>
+    <span class="stage-label">Upcoming</span>
+  </article>
+  <article class="stage-card task-summary-card">
+    <span class="stage-count">{{ summary.waiting }}</span>
+    <span class="stage-label">Waiting</span>
+  </article>
+  <article class="stage-card task-summary-card">
+    <span class="stage-count">{{ summary.done_this_week }}</span>
+    <span class="stage-label">Done this week</span>
+  </article>
+</section>
+
+<form class="filters task-filter-form" method="get" action="{{ url_for('tasks_board') }}">
+  <label>
+    <span>Status</span>
+    <select name="status">
+      <option value="">All</option>
+      {% for value, label in task_status_options %}
+      <option value="{{ value }}" {% if filters.status == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    <span>Type</span>
+    <select name="task_type">
+      <option value="">All</option>
+      {% for value, label in task_type_options %}
+      <option value="{{ value }}" {% if filters.task_type == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    <span>Priority</span>
+    <select name="priority">
+      <option value="">All</option>
+      {% for value, label in task_priority_options %}
+      <option value="{{ value }}" {% if filters.priority == value %}selected{% endif %}>{{ label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    <span>Market</span>
+    <select name="market">
+      <option value="">All markets</option>
+      {% for option in market_options %}
+      <option value="{{ option.value }}" {% if filters.market == option.value %}selected{% endif %}>{{ option.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    <span>Assigned To</span>
+    <input name="assigned_to" value="{{ filters.assigned_to }}">
+  </label>
+  <label>
+    <span>Due</span>
+    <select name="due_bucket">
+      <option value="">All</option>
+      {% for option in due_bucket_options %}
+      <option value="{{ option.value }}" {% if filters.due_bucket == option.value %}selected{% endif %}>{{ option.label }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>
+    <span>Search</span>
+    <input name="q" value="{{ filters.q }}" placeholder="Business, contact, notes">
+  </label>
+  <div class="filter-actions">
+    <button class="button primary" type="submit">Apply</button>
+    <a class="button" href="{{ url_for('tasks_board') }}">Reset</a>
+  </div>
+</form>
+
+<section class="global-task-board">
+  {% for group in grouped_tasks %}
+  {% if group.key == "completed" %}
+  <details class="panel task-group-panel">
+    <summary>{{ group.label }} ({{ group.tasks|length }})</summary>
+  {% else %}
+  <section class="panel task-group-panel">
+    <div class="panel-header">
+      <h2>{{ group.label }}</h2>
+      <span class="pill">{{ group.tasks|length }}</span>
+    </div>
+  {% endif %}
+    <div class="task-list">
+      {% for task in group.tasks %}
+      <article class="task-row task-{{ task.due_bucket }}">
+        <div class="task-row-main">
+          <div class="task-badge-row">
+            <span class="task-badge">{{ task.type_label }}</span>
+            {% if task.is_auto %}<span class="task-badge">Auto</span>{% endif %}
+            <span class="task-badge priority-{{ task.priority }}">{{ task.priority_label }}</span>
+            <span class="task-due">{{ task.due_label }}</span>
+          </div>
+          <h3>{{ task.title }}</h3>
+          <p>
+            <a href="{{ url_for('case_file', prospect_id=task.prospect_id, task=task.id) }}#task-{{ task.id }}">{{ task.prospect_business_name }}</a>
+            / {{ task.prospect_market or "No market" }}{% if task.prospect_niche %} / {{ task.prospect_niche }}{% endif %}
+          </p>
+          <p>{{ task.assigned_to or "Unassigned" }}</p>
+          {% if task.contact_name or task.contact_email or task.contact_phone %}
+          <small>{{ task.contact_name or "" }}{% if task.contact_email %} / {{ task.contact_email }}{% endif %}{% if task.contact_phone %} / {{ task.contact_phone }}{% endif %}</small>
+          {% endif %}
+        </div>
+        <div class="task-actions">
+          <a class="button" href="{{ url_for('case_file', prospect_id=task.prospect_id, task=task.id) }}#task-{{ task.id }}">Case</a>
+          {% if not task.is_closed %}
+          <form method="post" action="{{ url_for('complete_task', task_id=task.id) }}">
+    {{ csrf_input() }}
+            <input type="hidden" name="return_to" value="tasks">
+            <button class="button primary" type="submit">Done</button>
+          </form>
+          <form method="post" action="{{ url_for('snooze_task', task_id=task.id) }}">
+    {{ csrf_input() }}
+            <input type="hidden" name="return_to" value="tasks">
+            <input type="hidden" name="quick_snooze" value="tomorrow">
+            <button class="button" type="submit">Snooze</button>
+          </form>
+          {% endif %}
+          <a class="button" href="{{ url_for('task_detail', task_id=task.id) }}">Edit</a>
+        </div>
+      </article>
+      {% else %}
+      <p class="empty">No tasks in this group.</p>
+      {% endfor %}
+    </div>
+  {% if group.key == "completed" %}
+  </details>
+  {% else %}
+  </section>
+  {% endif %}
+  {% endfor %}
+</section>
+{% endblock %}

@@ -45,6 +45,7 @@
 
   {% if import_enabled %}
   <form class="send-form" method="post" action="{{ url_for('database_import') }}" enctype="multipart/form-data">
+    {{ csrf_input() }}
     <label>
       <span>SQLite database file</span>
       <input type="file" name="database_file" accept=".db" required>

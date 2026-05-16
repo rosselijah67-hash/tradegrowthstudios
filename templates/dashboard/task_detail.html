@@ -1,0 +1,151 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}{{ task.title }} - Task{% endblock %}
+
+{% block content %}
+<section class="case-header">
+  <div>
+    <a class="back-link" href="{{ url_for('tasks_board') }}">Back to tasks</a>
+    <h1>{{ task.title }}</h1>
+    <div class="case-meta">
+      <span>{{ task.type_label }}</span>
+      <span>{{ task.priority_label }}</span>
+      <span>{{ task.status_label }}</span>
+      <span>{{ task.due_label }}</span>
+    </div>
+  </div>
+  <div class="case-header-actions">
+    <a class="button" href="{{ url_for('case_file', prospect_id=task.prospect_id, task=task.id) }}#task-{{ task.id }}">Open Case</a>
+    {% if dashboard_permissions.quotes and task.quote_id %}
+    <a class="button" href="{{ url_for('quote_detail', quote_id=task.quote_id) }}">Open Quote</a>
+    {% endif %}
+  </div>
+</section>
+
+{% if message %}
+<div class="notice {{ message.status }}">{{ message.message }}</div>
+{% endif %}
+
+<section class="case-crm-grid task-detail-grid">
+  <form class="panel task-detail-form" method="post" action="{{ url_for('update_task', task_id=task.id) }}">
+    {{ csrf_input() }}
+    <div class="panel-header">
+      <div>
+        <h2>Edit Task</h2>
+        <p>{{ task.prospect_business_name }}{% if task.prospect_market %} / {{ task.prospect_market }}{% endif %}</p>
+      </div>
+    </div>
+    <div class="compact-task-form">
+      <label>
+        <span>Type</span>
+        <select name="task_type">
+          {% for value, label in task_type_options %}
+          <option value="{{ value }}" {% if task.task_type == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label class="task-title-field">
+        <span>Title</span>
+        <input name="title" value="{{ task.title }}">
+      </label>
+      <label>
+        <span>Status</span>
+        <select name="status">
+          {% for value, label in task_status_options %}
+          <option value="{{ value }}" {% if task.status == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Due Date</span>
+        <input type="date" name="due_date" value="{{ task.due_date or '' }}">
+      </label>
+      <label>
+        <span>Due Time</span>
+        <input type="time" name="due_time" value="{{ task.due_time or '' }}">
+      </label>
+      <label>
+        <span>Priority</span>
+        <select name="priority">
+          {% for value, label in task_priority_options %}
+          <option value="{{ value }}" {% if task.priority == value %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Assigned To</span>
+        <input name="assigned_to" value="{{ task.assigned_to or '' }}">
+      </label>
+      <label class="task-contact-select">
+        <span>Contact</span>
+        <select name="contact_id">
+          <option value="">No saved contact</option>
+          {% for contact in contacts %}
+          <option value="{{ contact.id }}" {% if task.contact_id == contact.id %}selected{% endif %}>{{ contact.name or contact.email or contact.phone or "Unnamed contact" }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>
+        <span>Contact Name</span>
+        <input name="contact_name" value="{{ task.contact_name or '' }}">
+      </label>
+      <label>
+        <span>Contact Email</span>
+        <input name="contact_email" value="{{ task.contact_email or '' }}">
+      </label>
+      <label>
+        <span>Contact Phone</span>
+        <input name="contact_phone" value="{{ task.contact_phone or '' }}">
+      </label>
+      <label class="task-notes-field">
+        <span>Notes</span>
+        <textarea name="notes" rows="4">{{ task.notes or "" }}</textarea>
+      </label>
+      <label class="task-notes-field">
+        <span>Outcome Notes</span>
+        <textarea name="outcome_notes" rows="3">{{ task.outcome_notes or "" }}</textarea>
+      </label>
+    </div>
+    <div class="review-actions">
+      <button class="button primary" type="submit">Save Task</button>
+    </div>
+  </form>
+
+  <aside class="panel task-action-panel">
+    <div class="panel-header">
+      <h2>Quick Actions</h2>
+    </div>
+    <div class="task-action-stack">
+      <form method="post" action="{{ url_for('complete_task', task_id=task.id) }}">
+    {{ csrf_input() }}
+        <label>
+          <span>Outcome Notes</span>
+          <textarea name="outcome_notes" rows="3"></textarea>
+        </label>
+        <button class="button primary" type="submit">Mark Done</button>
+      </form>
+      <form method="post" action="{{ url_for('cancel_task', task_id=task.id) }}">
+    {{ csrf_input() }}
+        <label>
+          <span>Cancel Notes</span>
+          <textarea name="outcome_notes" rows="3"></textarea>
+        </label>
+        <button class="button danger" type="submit">Cancel Task</button>
+      </form>
+      <form method="post" action="{{ url_for('snooze_task', task_id=task.id) }}">
+    {{ csrf_input() }}
+        <div class="task-snooze-grid">
+          <button class="button" type="submit" name="quick_snooze" value="tomorrow">Tomorrow</button>
+          <button class="button" type="submit" name="quick_snooze" value="plus_2_days">+2 Days</button>
+          <button class="button" type="submit" name="quick_snooze" value="next_week">Next Week</button>
+        </div>
+        <label>
+          <span>Snooze Until</span>
+          <input type="datetime-local" name="snooze_until">
+        </label>
+        <button class="button" type="submit">Snooze</button>
+      </form>
+    </div>
+  </aside>
+</section>
+{% endblock %}

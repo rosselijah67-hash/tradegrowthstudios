@@ -310,6 +310,119 @@ h3 {
   font-weight: 700;
 }
 
+.overview-command-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.overview-command-card,
+.overview-metric-group {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+
+.overview-command-card {
+  display: flex;
+  min-height: 76px;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  color: var(--text);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.overview-command-card:hover,
+.overview-metric-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-hover);
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+
+.overview-command-card span,
+.overview-metric-card span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.overview-command-card strong {
+  font-size: 1.7rem;
+  line-height: 1;
+}
+
+.overview-empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.overview-metric-groups {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 22px;
+}
+
+.overview-metric-group summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  font-weight: 800;
+  list-style: none;
+}
+
+.overview-metric-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.overview-metric-group summary::before {
+  content: "";
+  width: 0;
+  height: 0;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 7px solid var(--muted);
+  transition: transform 0.16s ease;
+}
+
+.overview-metric-group[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.overview-metric-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: 8px;
+  padding: 0 14px 14px;
+}
+
+.overview-metric-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  color: var(--text);
+  transition: border-color 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+.overview-metric-card strong {
+  font-size: 1.1rem;
+}
+
 .summary-grid,
 .case-grid {
   display: grid;
@@ -975,9 +1088,40 @@ dd {
 
 .crm-board {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 14px;
-  align-items: start;
+}
+
+.crm-group {
+  display: grid;
+  gap: 12px;
+}
+
+.crm-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.crm-group-header h2 {
+  margin: 0;
+}
+
+.crm-group-stage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 12px;
+}
+
+.crm-stage-lane {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  min-height: 160px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
 }
 
 .crm-column {
@@ -999,7 +1143,7 @@ dd {
   min-width: 38px;
   padding: 5px 8px;
   border-radius: 8px;
-  background: var(--surface-strong);
+  background: #ffffff;
   text-align: center;
 }
 
@@ -1012,16 +1156,22 @@ dd {
 
 .crm-card {
   display: grid;
-  gap: 4px;
+  gap: 8px;
   padding: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
+  background: #ffffff;
   color: var(--text);
 }
 
 .crm-card:hover {
   border-color: var(--accent);
   text-decoration: none;
+}
+
+.crm-card-top {
+  display: grid;
+  gap: 3px;
 }
 
 .crm-card span,
@@ -1032,8 +1182,32 @@ dd {
   color: var(--muted);
 }
 
+.crm-card-top strong {
+  line-height: 1.25;
+}
+
+.crm-status-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+}
+
+.crm-badge {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: var(--accent-soft);
+  color: var(--accent-strong) !important;
+  font-weight: 800;
+}
+
 .crm-quote-indicator,
-.crm-quote-cell {
+.crm-quote-cell,
+.crm-task-summary {
   display: grid;
   gap: 2px;
   padding: 7px 8px;
@@ -1049,15 +1223,52 @@ dd {
   color: var(--accent-strong);
 }
 
+.crm-quote-indicator:hover,
+.crm-task-summary:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+
+.crm-task-summary span {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.crm-task-summary b {
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #fee2e2;
+  color: #991b1b;
+  font-size: 0.72rem;
+}
+
+.crm-task-summary.is-overdue {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+
+.crm-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 2px;
+}
+
 .crm-quote-cell {
   min-width: 150px;
 }
 
 .case-crm-grid {
   display: grid;
-  grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.2fr);
+  grid-template-columns: minmax(240px, 0.7fr) minmax(360px, 1.35fr) minmax(0, 1fr);
   gap: 14px;
   margin-bottom: 24px;
+}
+
+.task-detail-grid {
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.65fr);
 }
 
 .crm-stage-form,
@@ -1098,6 +1309,229 @@ dd {
 
 .stage-history-panel {
   margin-bottom: 24px;
+}
+
+.task-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.task-panel .panel-header p {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.task-next-banner,
+.task-item,
+.task-row {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.task-next-banner {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.task-next-banner span {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.task-next-banner h3,
+.task-next-banner p,
+.task-row h3,
+.task-row p,
+.task-item p {
+  margin: 0;
+}
+
+.task-next-overdue,
+.task-overdue {
+  border-color: #fecdca;
+  background: var(--danger-soft);
+}
+
+.task-next-today,
+.task-today {
+  border-color: #f7d27a;
+  background: var(--warn-soft);
+}
+
+.task-next-upcoming {
+  border-color: #b8dcd6;
+  background: #f4fbfa;
+}
+
+.task-quick-add,
+.task-actions,
+.task-badge-row,
+.task-snooze-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.task-actions {
+  justify-content: flex-end;
+}
+
+.task-actions form {
+  margin: 0;
+}
+
+.task-quick-add .button,
+.task-actions .button,
+.task-snooze-grid .button {
+  min-height: 32px;
+  padding: 6px 9px;
+  font-size: 0.82rem;
+}
+
+.task-form,
+.compact-task-form {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.task-title-field,
+.task-contact-select,
+.task-notes-field {
+  grid-column: span 2;
+}
+
+.task-notes-field {
+  grid-column: 1 / -1;
+}
+
+.compact-task-form textarea {
+  min-height: 78px;
+}
+
+.task-list-block {
+  display: grid;
+  gap: 8px;
+}
+
+.task-list-block h3,
+.task-list-block summary {
+  margin: 0;
+  font-size: 0.92rem;
+  font-weight: 900;
+}
+
+.task-list {
+  display: grid;
+  gap: 8px;
+}
+
+.task-item {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  background: #ffffff;
+}
+
+.task-item-main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.task-item-main small,
+.task-row-main small,
+.task-row-main p {
+  color: var(--muted);
+}
+
+.task-badge,
+.task-due {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: var(--surface-strong);
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 900;
+}
+
+.priority-high {
+  background: var(--warn-soft);
+  color: #7a4d00;
+}
+
+.priority-urgent {
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+.task-highlight {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(29, 154, 143, 0.15);
+}
+
+.task-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 18px;
+}
+
+.task-summary-card {
+  min-height: 92px;
+}
+
+.task-filter-form {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+}
+
+.global-task-board,
+.task-action-stack {
+  display: grid;
+  gap: 14px;
+}
+
+.task-group-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.task-group-panel summary {
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.task-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  background: #ffffff;
+}
+
+.task-row-main {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.task-action-panel form {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.task-action-panel form:first-child {
+  padding-top: 0;
+  border-top: 0;
 }
 
 .quote-create-button {
@@ -1664,6 +2098,28 @@ dd {
   background: var(--surface-strong);
   color: var(--muted);
   font-weight: 800;
+}
+
+.admin-permission-box {
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.admin-permission-box legend {
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.admin-permission-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
 }
 
 .admin-form,
@@ -2514,6 +2970,11 @@ dd {
   .filters,
   .case-grid,
   .case-crm-grid,
+  .task-detail-grid,
+  .task-summary-grid,
+  .task-filter-form,
+  .task-form,
+  .compact-task-form,
   .outbound-status-strip,
   .outbound-queue-form,
   .send-grid,
@@ -2583,6 +3044,8 @@ dd {
   }
 
   .summary-grid,
+  .overview-command-strip,
+  .overview-metric-card-grid,
   .filters,
   .market-filter-form,
   .case-grid,
@@ -2598,20 +3061,35 @@ dd {
   .draft-status-grid,
   .packet-grid,
   .packet-speed-grid,
-  .quote-summary-grid,
+    .quote-summary-grid,
   .quote-form-grid,
   .quote-scope-columns,
   .quote-inline-controls,
   .quote-toggle-row,
   .quote-detail-grid,
   .quote-custom-line,
+  .task-detail-grid,
+  .task-summary-grid,
+  .task-filter-form,
+  .task-form,
+  .compact-task-form,
+  .task-next-banner,
+  .task-item,
+  .task-row,
   .contact-form,
   .contact-item,
   .timeline-item,
-  .admin-diagnostics-grid,
-  .admin-user-card-grid,
-  .admin-form-grid {
+    .admin-diagnostics-grid,
+    .admin-user-card-grid,
+    .admin-form-grid,
+    .admin-permission-grid {
     grid-template-columns: 1fr;
+  }
+
+  .task-title-field,
+  .task-contact-select,
+  .task-notes-field {
+    grid-column: auto;
   }
 
   .review-grid {

@@ -47,6 +47,7 @@
     <p>Newly deleted leads keep screenshots for {{ retention_days }} days. After that, screenshots can be purged while the lead row stays saved for dedupe.</p>
   </div>
   <form method="post" action="{{ url_for('purge_trash_media') }}">
+    {{ csrf_input() }}
     <input type="hidden" name="market" value="{{ market_filter.selected }}">
     <input type="hidden" name="category" value="{{ category_filter.selected }}">
     <button class="button danger" type="submit" {% if summary.selected_media_due == 0 %}disabled{% endif %}>Purge Due Media</button>
@@ -107,6 +108,7 @@
             <td class="table-actions">
               <a class="table-action" href="{{ url_for('case_file', prospect_id=row.id) }}">Case</a>
               <form method="post" action="{{ url_for('restore_trash', prospect_id=row.id) }}">
+    {{ csrf_input() }}
                 <input type="hidden" name="market" value="{{ market_filter.selected }}">
                 <input type="hidden" name="category" value="{{ category_filter.selected }}">
                 <button class="button primary" type="submit">Revive</button>

@@ -179,12 +179,15 @@
   </div>
   <div class="quote-action-forms">
     <form method="post" action="{{ url_for('mark_quote_sent', quote_id=quote.id) }}">
+    {{ csrf_input() }}
       <button class="button" type="submit">Mark Sent</button>
     </form>
     <form method="post" action="{{ url_for('mark_quote_accepted', quote_id=quote.id) }}">
+    {{ csrf_input() }}
       <button class="button primary" type="submit">Mark Accepted</button>
     </form>
     <form method="post" action="{{ url_for('mark_quote_declined', quote_id=quote.id) }}">
+    {{ csrf_input() }}
       <label class="quote-confirm-row">
         <input type="checkbox" name="confirm_close_lost" value="1">
         <span>Also close CRM as lost</span>
@@ -192,9 +195,11 @@
       <button class="button danger" type="submit">Mark Declined</button>
     </form>
     <form method="post" action="{{ url_for('create_quote_revision', quote_id=quote.id) }}">
+    {{ csrf_input() }}
       <button class="button" type="submit">Create Revision</button>
     </form>
     <form method="post" action="{{ url_for('delete_quote', quote_id=quote.id) }}" onsubmit="return confirm('Delete this quote and its saved line items? This cannot be undone.');">
+    {{ csrf_input() }}
       <input type="hidden" name="confirm_delete" value="1">
       <input type="hidden" name="return_to" value="case">
       <button class="button danger" type="submit">Delete Quote</button>

@@ -47,6 +47,14 @@ AUTH_SESSION_USER_KEY = "user_id"
 USERNAME_SESSION_KEYS = (AUTH_SESSION_USER_KEY, "username")
 STATE_CODE_RE = re.compile(r"^[A-Z]{2}$")
 F = TypeVar("F", bound=Callable[..., Any])
+USER_PERMISSION_KEYS = ("quotes", "run_jobs", "outbound", "send")
+USER_PERMISSION_LABELS = {
+    "quotes": "Quotes",
+    "run_jobs": "Run / Jobs",
+    "outbound": "Outbound",
+    "send": "Send",
+}
+DEFAULT_USER_PERMISSIONS = {key: True for key in USER_PERMISSION_KEYS}
 
 
 @dataclass(frozen=True)
@@ -58,6 +66,7 @@ class User(_UserMixin):
     display_name: str
     allowed_states: tuple[str, ...]
     password_hash_env: str
+    permissions: Mapping[str, bool] = field(default_factory=dict)
     password_hash: str | None = field(default=None, repr=False)
 
     @property
@@ -104,12 +113,18 @@ def load_user_config(path: str | Path | None = None) -> dict[str, Any]:
             role=role,
             username=username,
         )
+        permissions = _canonical_permissions(
+            raw_details.get("permissions"),
+            role=role,
+            username=username,
+        )
 
         normalized_users[username] = {
             "role": role,
             "display_name": display_name,
             "allowed_states": list(allowed_states),
             "password_hash_env": password_hash_env,
+            "permissions": permissions,
         }
 
     return {"users": normalized_users}
@@ -143,6 +158,7 @@ def load_auth_users() -> dict[str, User]:
             display_name=details["display_name"],
             allowed_states=tuple(details["allowed_states"]),
             password_hash_env=password_hash_env,
+            permissions=dict(details.get("permissions") or DEFAULT_USER_PERMISSIONS),
             password_hash=password_hash,
         )
     return users
@@ -211,6 +227,16 @@ def user_can_access_state(user: User | None, state_code: str | None) -> bool:
     if normalized_state is None:
         return False
     return normalized_state in user.allowed_states
+
+
+def user_has_permission(user: User | None, permission_key: str) -> bool:
+    if user is None:
+        return False
+    if is_admin(user):
+        return True
+    if permission_key not in USER_PERMISSION_KEYS:
+        return False
+    return bool(user.permissions.get(permission_key, DEFAULT_USER_PERMISSIONS[permission_key]))
 
 
 def current_app_user() -> User | None:
@@ -360,6 +386,42 @@ def _canonical_allowed_states(
         if normalized_state not in normalized_states:
             normalized_states.append(normalized_state)
     return tuple(normalized_states)
+
+
+def _canonical_permissions(
+    value: Any,
+    *,
+    role: str,
+    username: str,
+) -> dict[str, bool]:
+    permissions = dict(DEFAULT_USER_PERMISSIONS)
+    if role == "admin":
+        return permissions
+    if value is None:
+        return permissions
+    if not isinstance(value, Mapping):
+        raise ValueError(f"Auth user {username} permissions must be a mapping.")
+    for key, raw_allowed in value.items():
+        permission_key = str(key or "").strip().lower()
+        if permission_key not in USER_PERMISSION_KEYS:
+            raise ValueError(f"Auth user {username} has unknown permission: {key!r}")
+        permissions[permission_key] = _coerce_permission_bool(raw_allowed)
+    return permissions
+
+
+def _coerce_permission_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, (int, float)):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on", "enabled", "allow", "allowed"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off", "disabled", "deny", "denied"}:
+        return False
+    return bool(normalized)
 
 
 def _iter_allowed_state_values(value: Any) -> Iterable[str]:

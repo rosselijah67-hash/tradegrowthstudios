@@ -335,6 +335,87 @@ CREATE INDEX IF NOT EXISTS idx_quote_events_created
 """
 
 
+CRM_TASK_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS crm_tasks (
+    id INTEGER PRIMARY KEY,
+    task_key TEXT UNIQUE NOT NULL,
+    prospect_id INTEGER NOT NULL,
+    quote_id INTEGER,
+    contact_id INTEGER,
+    assigned_to TEXT,
+    created_by TEXT,
+    owner_username TEXT,
+    market_state TEXT,
+    task_type TEXT NOT NULL
+        CHECK (
+            task_type IN (
+                'follow_up',
+                'needs_quote',
+                'call_scheduled',
+                'proposal_follow_up',
+                'collect_assets',
+                'client_access_needed',
+                'public_packet_needed',
+                'draft_review',
+                'send_outreach',
+                'contract_deposit',
+                'project_handoff',
+                'launch_qa',
+                'custom'
+            )
+        ),
+    title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open'
+        CHECK (status IN ('open', 'in_progress', 'waiting', 'done', 'cancelled')),
+    priority TEXT NOT NULL DEFAULT 'normal'
+        CHECK (priority IN ('low', 'normal', 'high', 'urgent')),
+    due_date TEXT,
+    due_time TEXT,
+    due_at TEXT,
+    timezone TEXT,
+    contact_name TEXT,
+    contact_email TEXT,
+    contact_phone TEXT,
+    notes TEXT,
+    outcome_notes TEXT,
+    snooze_until TEXT,
+    completed_at TEXT,
+    cancelled_at TEXT,
+    auto_task_key TEXT,
+    metadata_json TEXT,
+    created_at TEXT,
+    updated_at TEXT,
+    FOREIGN KEY (prospect_id) REFERENCES prospects(id) ON DELETE CASCADE,
+    FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL,
+    FOREIGN KEY (contact_id) REFERENCES contacts(id) ON DELETE SET NULL
+);
+"""
+
+
+CRM_TASK_INDEX_SQL = (
+    "CREATE INDEX IF NOT EXISTS idx_crm_tasks_prospect_id ON crm_tasks(prospect_id)",
+    "CREATE INDEX IF NOT EXISTS idx_crm_tasks_quote_id ON crm_tasks(quote_id)",
+    "CREATE INDEX IF NOT EXISTS idx_crm_tasks_assigned_to ON crm_tasks(assigned_to)",
+    "CREATE INDEX IF NOT EXISTS idx_crm_tasks_owner_username ON crm_tasks(owner_username)",
+    "CREATE INDEX IF NOT EXISTS idx_crm_tasks_market_state ON crm_tasks(market_state)",
+    "CREATE INDEX IF NOT EXISTS idx_crm_tasks_status ON crm_tasks(status)",
+    "CREATE INDEX IF NOT EXISTS idx_crm_tasks_due_at ON crm_tasks(due_at)",
+    "CREATE INDEX IF NOT EXISTS idx_crm_tasks_task_type ON crm_tasks(task_type)",
+    "CREATE INDEX IF NOT EXISTS idx_crm_tasks_priority ON crm_tasks(priority)",
+)
+
+CRM_TASK_AUTO_TASK_KEY_UNIQUE_INDEX_SQL = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_crm_tasks_auto_task_key_active "
+    "ON crm_tasks(auto_task_key) "
+    "WHERE auto_task_key IS NOT NULL "
+    "AND status IN ('open', 'in_progress', 'waiting')"
+)
+CRM_TASK_AUTO_TASK_KEY_FALLBACK_INDEX_SQL = (
+    "CREATE INDEX IF NOT EXISTS idx_crm_tasks_auto_task_key "
+    "ON crm_tasks(auto_task_key)"
+)
+
+
 PROSPECT_COLUMN_MIGRATIONS = {
     "place_id": "TEXT",
     "formatted_address": "TEXT",
@@ -389,6 +470,38 @@ TERRITORY_COLUMN_MIGRATIONS = {
 }
 
 
+CRM_TASK_COLUMN_MIGRATIONS = {
+    "task_key": "TEXT",
+    "prospect_id": "INTEGER",
+    "quote_id": "INTEGER",
+    "contact_id": "INTEGER",
+    "assigned_to": "TEXT",
+    "created_by": "TEXT",
+    "owner_username": "TEXT",
+    "market_state": "TEXT",
+    "task_type": "TEXT",
+    "title": "TEXT",
+    "status": "TEXT NOT NULL DEFAULT 'open'",
+    "priority": "TEXT NOT NULL DEFAULT 'normal'",
+    "due_date": "TEXT",
+    "due_time": "TEXT",
+    "due_at": "TEXT",
+    "timezone": "TEXT",
+    "contact_name": "TEXT",
+    "contact_email": "TEXT",
+    "contact_phone": "TEXT",
+    "notes": "TEXT",
+    "outcome_notes": "TEXT",
+    "snooze_until": "TEXT",
+    "completed_at": "TEXT",
+    "cancelled_at": "TEXT",
+    "auto_task_key": "TEXT",
+    "metadata_json": "TEXT",
+    "created_at": "TEXT",
+    "updated_at": "TEXT",
+}
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -437,6 +550,7 @@ def init_db(db_path: str | Path | None = None) -> sqlite3.Connection:
     ensure_prospect_place_columns(connection)
     ensure_artifact_columns(connection)
     ensure_quote_schema(connection)
+    ensure_task_schema(connection)
     ensure_territory_columns(connection)
     connection.commit()
     return connection
@@ -457,6 +571,87 @@ def ensure_quote_schema_for_path(db_path: str | Path | None = None) -> None:
     connection = connect(db_path)
     try:
         ensure_quote_schema(connection)
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def ensure_task_schema(connection: sqlite3.Connection) -> None:
+    """Create CRM task tables, migrations, and indexes idempotently."""
+
+    connection.executescript(CRM_TASK_SCHEMA_SQL)
+    ensure_table_columns(connection, "crm_tasks", CRM_TASK_COLUMN_MIGRATIONS)
+    backfill_crm_task_auto_task_keys(connection)
+    for index_sql in CRM_TASK_INDEX_SQL:
+        connection.execute(index_sql)
+    ensure_crm_task_auto_task_key_index(connection)
+
+
+def ensure_crm_task_auto_task_key_index(connection: sqlite3.Connection) -> None:
+    try:
+        connection.execute(CRM_TASK_AUTO_TASK_KEY_UNIQUE_INDEX_SQL)
+    except sqlite3.DatabaseError:
+        connection.execute(CRM_TASK_AUTO_TASK_KEY_FALLBACK_INDEX_SQL)
+
+
+def backfill_crm_task_auto_task_keys(connection: sqlite3.Connection) -> None:
+    active_statuses = {"open", "in_progress", "waiting"}
+    active_keys = {
+        str(row["auto_task_key"])
+        for row in connection.execute(
+            """
+            SELECT DISTINCT auto_task_key
+            FROM crm_tasks
+            WHERE auto_task_key IS NOT NULL
+              AND auto_task_key <> ''
+              AND status IN ('open', 'in_progress', 'waiting')
+            """
+        ).fetchall()
+    }
+    rows = connection.execute(
+        """
+        SELECT id, status, auto_task_key, metadata_json
+        FROM crm_tasks
+        WHERE (auto_task_key IS NULL OR auto_task_key = '')
+          AND metadata_json LIKE '%auto_task_key%'
+        ORDER BY id
+        """
+    ).fetchall()
+    for row in rows:
+        auto_task_key = auto_task_key_from_metadata(row["metadata_json"])
+        if not auto_task_key:
+            continue
+        status = str(row["status"] or "")
+        if status in active_statuses:
+            if auto_task_key in active_keys:
+                continue
+            active_keys.add(auto_task_key)
+        connection.execute(
+            "UPDATE crm_tasks SET auto_task_key = ? WHERE id = ?",
+            (auto_task_key, row["id"]),
+        )
+
+
+def auto_task_key_from_metadata(metadata_json: Any) -> str:
+    try:
+        metadata = json.loads(str(metadata_json or "{}"))
+    except (TypeError, json.JSONDecodeError):
+        return ""
+    if not isinstance(metadata, dict):
+        return ""
+    return str(metadata.get("auto_task_key") or "").strip()
+
+
+def ensure_crm_task_schema(connection: sqlite3.Connection) -> None:
+    """Backward-compatible explicit name for CRM task schema setup."""
+
+    ensure_task_schema(connection)
+
+
+def ensure_task_schema_for_path(db_path: str | Path | None = None) -> None:
+    connection = connect(db_path)
+    try:
+        ensure_task_schema(connection)
         connection.commit()
     finally:
         connection.close()
@@ -876,6 +1071,7 @@ def main() -> int:
             "quotes",
             "quote_line_items",
             "quote_events",
+            "crm_tasks",
         ],
     )
     print(json.dumps({"database_ready": True, "counts": counts}, sort_keys=True))

@@ -44,6 +44,7 @@
 <section class="pipeline-grid" aria-label="Pipeline job controls">
   {% for job_type, job in jobs.items() %}
     <form class="panel pipeline-job-card" method="post" action="{{ url_for('run_pipeline_job') }}">
+    {{ csrf_input() }}
       <input type="hidden" name="job_type" value="{{ job_type }}">
       <div class="panel-header">
         <div>
