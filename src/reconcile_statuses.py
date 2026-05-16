@@ -100,6 +100,14 @@ def _plan_for_prospect(connection: Any, prospect: dict[str, Any]) -> PlannedChan
     )
 
     if (
+        qualification_status == QualificationStatus.NO_WEBSITE
+        and current_status not in LATER_LIFECYCLE_STATUSES
+    ):
+        new_status = ProspectStatus.NO_WEBSITE
+        new_next_action = NextAction.COLD_CALL_WEBSITE
+        reasons.append("NO_WEBSITE prospect should be NO_WEBSITE/COLD_CALL_WEBSITE")
+
+    if (
         qualification_status == QualificationStatus.DISQUALIFIED
         and current_status not in LATER_LIFECYCLE_STATUSES
     ):

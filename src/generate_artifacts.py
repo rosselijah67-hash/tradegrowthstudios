@@ -175,6 +175,10 @@ def _select_candidate_by_id(connection: Any, prospect_id: int) -> list[dict[str,
 
 
 def _artifact_block_reason(connection: Any, prospect: dict[str, Any]) -> str | None:
+    if str(prospect.get("status") or "").strip().upper() == "NO_WEBSITE":
+        return "no_website_bucket"
+    if not str(prospect.get("website_url") or "").strip():
+        return "missing_website_url"
     if prospect.get("audit_data_status") != "READY":
         return f"audit_data_status={prospect.get('audit_data_status') or 'UNKNOWN'}"
     scores = _pagespeed_scores(connection, prospect, _score_explanation(prospect))

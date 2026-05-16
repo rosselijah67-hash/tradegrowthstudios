@@ -11,7 +11,7 @@ from . import actor_context, db, territories
 from .cli_utils import build_parser, finish_command, setup_command
 from .config import load_yaml_config
 from .franchise_filter import check_franchise_exclusion
-from .state import ProspectStatus
+from .state import NextAction, ProspectStatus, QualificationStatus
 
 
 COMMAND = "places_pull"
@@ -60,6 +60,7 @@ class PullSummary:
     updated: int = 0
     duplicates_skipped: int = 0
     disqualified: int = 0
+    no_website: int = 0
     processed: int = 0
 
 
@@ -237,17 +238,17 @@ def _qualification_status(
             or franchise_exclusion.get("matched_regex")
             or "configured_exclusion"
         )
-        return "DISQUALIFIED", f"franchise_exclusion:{match}"
+        return QualificationStatus.DISQUALIFIED, f"franchise_exclusion:{match}"
     if not business_name or not place_id or not formatted_address:
-        return "DISQUALIFIED", "missing_minimum_fields"
+        return QualificationStatus.DISQUALIFIED, "missing_minimum_fields"
     if business_status and business_status != "OPERATIONAL":
-        return "DISQUALIFIED", "not_operational"
+        return QualificationStatus.DISQUALIFIED, "not_operational"
     if not domain:
-        return "DISQUALIFIED", "missing_website"
+        return QualificationStatus.NO_WEBSITE, "missing_website"
     if user_rating_count < min_reviews:
-        return "DISQUALIFIED", "too_few_reviews"
+        return QualificationStatus.DISQUALIFIED, "too_few_reviews"
 
-    return "DISCOVERED", None
+    return QualificationStatus.DISCOVERED, None
 
 
 def _normalize_place(
@@ -324,16 +325,29 @@ def _normalize_place(
         "business_status": business_status,
         "status": (
             ProspectStatus.INELIGIBLE
-            if qualification_status == "DISQUALIFIED"
-            else ProspectStatus.NEW
+            if qualification_status == QualificationStatus.DISQUALIFIED
+            else (
+                ProspectStatus.NO_WEBSITE
+                if qualification_status == QualificationStatus.NO_WEBSITE
+                else ProspectStatus.NEW
+            )
         ),
         "qualification_status": qualification_status,
-        "next_action": "DISCARD" if qualification_status == "DISQUALIFIED" else None,
+        "next_action": (
+            NextAction.DISCARD
+            if qualification_status == QualificationStatus.DISQUALIFIED
+            else (
+                NextAction.COLD_CALL_WEBSITE
+                if qualification_status == QualificationStatus.NO_WEBSITE
+                else None
+            )
+        ),
         "metadata": {
             "search_city": city,
             "search_term": search_term,
             "search_query": query,
             "disqualification_reason": disqualification_reason,
+            "no_website_bucket": qualification_status == QualificationStatus.NO_WEBSITE,
             "franchise_exclusion": franchise_exclusion,
         },
     }
@@ -531,8 +545,10 @@ def main() -> int:
                         min_reviews=min_reviews,
                     )
 
-                    if prospect["qualification_status"] == "DISQUALIFIED":
+                    if prospect["qualification_status"] == QualificationStatus.DISQUALIFIED:
                         summary.disqualified += 1
+                    if prospect["qualification_status"] == QualificationStatus.NO_WEBSITE:
+                        summary.no_website += 1
 
                     if _already_seen(prospect, seen_tokens):
                         summary.duplicates_skipped += 1
@@ -586,6 +602,7 @@ def main() -> int:
         updated=summary.updated,
         duplicates_skipped=summary.duplicates_skipped,
         disqualified=summary.disqualified,
+        no_website=summary.no_website,
     )
     return 0
 

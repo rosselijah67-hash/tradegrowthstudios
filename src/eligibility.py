@@ -10,6 +10,7 @@ from . import actor_context, db
 from .cli_utils import build_parser, finish_command, setup_command
 from .config import load_yaml_config, project_path
 from .franchise_filter import check_franchise_exclusion
+from .state import NextAction, ProspectStatus, QualificationStatus
 
 
 COMMAND = "eligibility"
@@ -17,6 +18,7 @@ CSV_PATH = "runs/latest/eligibility_summary.csv"
 QUALIFICATION_THRESHOLD = 55
 ELIGIBLE_SELECTION_STATUSES = ("DISCOVERED", "QUALIFIED", "DISQUALIFIED")
 PROTECTED_LIFECYCLE_STATUSES = (
+    "NO_WEBSITE",
     "INELIGIBLE",
     "REJECTED_REVIEW",
     "DISCARDED",
@@ -93,6 +95,15 @@ def _top_reasons(reasons: list[dict[str, Any]], forced_reasons: list[str]) -> li
     return (forced + scored)[:10]
 
 
+def _all_reasons(reasons: list[dict[str, Any]], forced_reasons: list[str]) -> list[dict[str, Any]]:
+    forced = [
+        {"points": 0, "reason": reason, "forced_disqualification": True}
+        for reason in forced_reasons
+    ]
+    scored = sorted(reasons, key=lambda item: abs(int(item["points"])), reverse=True)
+    return forced + scored
+
+
 def _metadata(prospect: dict[str, Any]) -> dict[str, Any]:
     loaded = _json_loads(prospect.get("metadata_json"), {})
     return loaded if isinstance(loaded, dict) else {}
@@ -136,6 +147,7 @@ def _score_prospect(
             "forced_reasons": [reason],
             "threshold": QUALIFICATION_THRESHOLD,
             "top_reasons": _top_reasons([], [reason]),
+            "all_reasons": _all_reasons([], [reason]),
             "franchise_exclusion": franchise_exclusion,
             "signals": {
                 "business_status": str(prospect.get("business_status") or "").strip() or None,
@@ -163,11 +175,12 @@ def _score_prospect(
     elif business_status:
         forced_reasons.append(f"business_status is {business_status}, not OPERATIONAL")
 
-    if _has_value(prospect.get("website_url")):
+    has_website_url = _has_value(prospect.get("website_url"))
+    if has_website_url:
         score += 15
         _add_reason(reasons, 15, "website_url present")
     else:
-        forced_reasons.append("missing website_url")
+        _add_reason(reasons, 0, "missing website_url")
 
     if _has_value(prospect.get("phone")):
         score += 10
@@ -217,13 +230,26 @@ def _score_prospect(
 
     score = _clamp_score(score)
     forced_disqualified = bool(forced_reasons)
-    qualification_status = (
-        "QUALIFIED"
-        if score >= QUALIFICATION_THRESHOLD and not forced_disqualified
-        else "DISQUALIFIED"
-    )
-    status = "ELIGIBLE_FOR_AUDIT" if qualification_status == "QUALIFIED" else "INELIGIBLE"
-    next_action = "RUN_AUDIT" if qualification_status == "QUALIFIED" else "DISCARD"
+    if not has_website_url and not forced_disqualified:
+        qualification_status = QualificationStatus.NO_WEBSITE
+        status = ProspectStatus.NO_WEBSITE
+        next_action = NextAction.COLD_CALL_WEBSITE
+    else:
+        qualification_status = (
+            QualificationStatus.QUALIFIED
+            if score >= QUALIFICATION_THRESHOLD and not forced_disqualified
+            else QualificationStatus.DISQUALIFIED
+        )
+        status = (
+            ProspectStatus.ELIGIBLE_FOR_AUDIT
+            if qualification_status == QualificationStatus.QUALIFIED
+            else ProspectStatus.INELIGIBLE
+        )
+        next_action = (
+            NextAction.RUN_AUDIT
+            if qualification_status == QualificationStatus.QUALIFIED
+            else NextAction.DISCARD
+        )
     top_reasons = _top_reasons(reasons, forced_reasons)
 
     return {
@@ -235,10 +261,11 @@ def _score_prospect(
         "forced_reasons": forced_reasons,
         "threshold": QUALIFICATION_THRESHOLD,
         "top_reasons": top_reasons,
+        "all_reasons": _all_reasons(reasons, forced_reasons),
         "franchise_exclusion": franchise_exclusion,
         "signals": {
             "business_status": business_status or None,
-            "has_website_url": _has_value(prospect.get("website_url")),
+            "has_website_url": has_website_url,
             "has_phone": _has_value(prospect.get("phone")),
             "rating": rating,
             "user_rating_count": review_count,
@@ -435,6 +462,7 @@ def main() -> int:
     rows: list[dict[str, Any]] = []
     qualified = 0
     disqualified = 0
+    no_website = 0
     forced_disqualified = 0
     updated = 0
 
@@ -444,8 +472,9 @@ def main() -> int:
             scoring_config=scoring_config,
             markets_config=markets_config,
         )
-        qualified += int(eligibility["qualification_status"] == "QUALIFIED")
-        disqualified += int(eligibility["qualification_status"] == "DISQUALIFIED")
+        qualified += int(eligibility["qualification_status"] == QualificationStatus.QUALIFIED)
+        disqualified += int(eligibility["qualification_status"] == QualificationStatus.DISQUALIFIED)
+        no_website += int(eligibility["qualification_status"] == QualificationStatus.NO_WEBSITE)
         forced_disqualified += int(bool(eligibility["forced_disqualified"]))
         rows.append(_csv_row(prospect, eligibility))
 
@@ -479,6 +508,7 @@ def main() -> int:
         "processed": len(prospects),
         "qualified": qualified,
         "disqualified": disqualified,
+        "no_website": no_website,
         "forced_disqualified": forced_disqualified,
         "dry_run": bool(args.dry_run),
     }

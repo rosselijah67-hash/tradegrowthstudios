@@ -45,7 +45,7 @@
     <div class="panel-header">
       <h2>Trash Can</h2>
     </div>
-    <p>Rejected, discarded, or ineligible leads stay out of the CRM, but their identifying info stays saved for dedupe.</p>
+    <p>Rejected, discarded, ineligible, and closed-lost leads stay searchable for cleanup or salvage without mixing into active work.</p>
   </div>
   <div class="trash-overview-stats">
     <span><strong>{{ trash_summary.count }}</strong> trashed</span>
@@ -65,6 +65,7 @@
         <tr>
           <th>Market</th>
           <th>Total Leads</th>
+          <th>No Website</th>
           <th>Eligible</th>
           <th>Pending Review</th>
           <th>Approved</th>
@@ -81,6 +82,7 @@
               {% if market.state %}<small>{{ market.state }}</small>{% endif %}
             </td>
             <td>{{ market.total }}</td>
+            <td>{{ market.no_website }}</td>
             <td>{{ market.eligible }}</td>
             <td>{{ market.pending_review }}</td>
             <td>{{ market.approved_for_outreach }}</td>
@@ -90,7 +92,7 @@
           </tr>
         {% else %}
           <tr>
-            <td colspan="8" class="empty">No market counts found.</td>
+            <td colspan="9" class="empty">No market counts found.</td>
           </tr>
         {% endfor %}
       </tbody>

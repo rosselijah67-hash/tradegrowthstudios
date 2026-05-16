@@ -6,7 +6,7 @@
 <section class="page-heading">
   <div>
     <h1>Trash</h1>
-    <p>{{ summary.count }} rejected, discarded, or ineligible leads hidden from normal CRM pages</p>
+    <p>{{ summary.selected_count }} shown from {{ summary.count }} rejected, discarded, ineligible, or closed-lost leads available for salvage</p>
   </div>
   <a class="button" href="{{ url_for('overview', market=market_filter.selected) if market_filter.selected else url_for('overview') }}">Back to Overview</a>
 </section>
@@ -25,6 +25,16 @@
       {% endfor %}
     </select>
   </label>
+  <label>
+    <span>Bucket</span>
+    <select name="category">
+      {% for option in category_filter.options %}
+        <option value="{{ option.value }}" {% if category_filter.selected == option.value %}selected{% endif %}>
+          {{ option.label }} ({{ option.count }})
+        </option>
+      {% endfor %}
+    </select>
+  </label>
   <div class="filter-actions">
     <button class="button primary" type="submit">Apply</button>
     <a class="button" href="{{ url_for('trash_can') }}">Reset</a>
@@ -38,7 +48,8 @@
   </div>
   <form method="post" action="{{ url_for('purge_trash_media') }}">
     <input type="hidden" name="market" value="{{ market_filter.selected }}">
-    <button class="button danger" type="submit" {% if summary.media_due == 0 %}disabled{% endif %}>Purge Due Media</button>
+    <input type="hidden" name="category" value="{{ category_filter.selected }}">
+    <button class="button danger" type="submit" {% if summary.selected_media_due == 0 %}disabled{% endif %}>Purge Due Media</button>
   </form>
 </section>
 
@@ -52,6 +63,7 @@
           <th>Market</th>
           <th>Niche</th>
           <th>Website</th>
+          <th>Bucket</th>
           <th>Reason</th>
           <th>Trashed</th>
           <th>Media purge</th>
@@ -72,7 +84,17 @@
                 <a class="website-pill" href="{{ href }}" target="_blank" rel="noopener noreferrer">Website</a>
               {% endif %}
             </td>
-            <td>{{ row.trash_reason|pretty_label }}</td>
+            <td><span class="pill">{{ row.trash_category|pretty_label }}</span></td>
+            <td class="trash-reason-cell">
+              <strong>{{ row.trash_reason|pretty_label }}</strong>
+              {% if row.trash_detail_lines %}
+                <ul class="trash-reason-list">
+                  {% for detail in row.trash_detail_lines %}
+                    <li>{{ detail|pretty_label }}</li>
+                  {% endfor %}
+                </ul>
+              {% endif %}
+            </td>
             <td>{{ row.trash_trashed_at or "" }}</td>
             <td>
               {% if row.trash_media_purged_at %}
@@ -86,13 +108,14 @@
               <a class="table-action" href="{{ url_for('case_file', prospect_id=row.id) }}">Case</a>
               <form method="post" action="{{ url_for('restore_trash', prospect_id=row.id) }}">
                 <input type="hidden" name="market" value="{{ market_filter.selected }}">
+                <input type="hidden" name="category" value="{{ category_filter.selected }}">
                 <button class="button primary" type="submit">Revive</button>
               </form>
             </td>
           </tr>
         {% else %}
           <tr>
-            <td colspan="10" class="empty">No rejected or discarded leads are in the trash.</td>
+            <td colspan="11" class="empty">No rejected, discarded, ineligible, or closed-lost leads match this trash filter.</td>
           </tr>
         {% endfor %}
       </tbody>

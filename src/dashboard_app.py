@@ -105,8 +105,17 @@ PUBLIC_AUTH_ENDPOINTS = {
 TRASH_MEDIA_RETENTION_DAYS = 3
 TRASH_STATUSES = ("INELIGIBLE", "REJECTED_REVIEW", "DISCARDED")
 TRASH_QUALIFICATION_STATUSES = ("DISQUALIFIED",)
+TRASH_VISIBLE_STATUSES = (*TRASH_STATUSES, "CLOSED_LOST")
+TRASH_CATEGORY_OPTIONS = (
+    ("all", "All Trash"),
+    ("manual_deleted", "Manual Deleted"),
+    ("system_deleted", "System Deleted"),
+    ("closed_lost", "Closed Lost"),
+    ("legacy", "Legacy/Other"),
+)
 TRASH_MEDIA_ARTIFACT_TYPES = ("screenshot_desktop", "screenshot_mobile")
 PROTECTED_JOB_STATUSES = (
+    "NO_WEBSITE",
     "INELIGIBLE",
     "REJECTED_REVIEW",
     "DISCARDED",
@@ -115,7 +124,7 @@ PROTECTED_JOB_STATUSES = (
     "PROJECT_ACTIVE",
     "PROJECT_COMPLETE",
 )
-PROTECTED_JOB_NEXT_ACTIONS = ("REJECTED_BY_REVIEW",)
+PROTECTED_JOB_NEXT_ACTIONS = ("REJECTED_BY_REVIEW", "COLD_CALL_WEBSITE")
 
 PIPELINE_JOBS = {
     "eligibility": {
@@ -146,6 +155,7 @@ PIPELINE_JOBS = {
 
 PIPELINE_COUNT_BUCKETS = [
     "DISCOVERED",
+    "NO_WEBSITE",
     "QUALIFIED",
     "DISQUALIFIED",
     "ELIGIBLE_FOR_AUDIT",
@@ -213,6 +223,9 @@ LEADS_COLUMNS = [
 ]
 
 LIFECYCLE_STAGE_ALIASES = {
+    "NO_WEBSITE": "NO_WEBSITE",
+    "MISSING_WEBSITE": "NO_WEBSITE",
+    "COLD_CALL_WEBSITE": "NO_WEBSITE",
     "ELIGIBLE_FOR_AUDIT": "ELIGIBLE_FOR_AUDIT",
     "INELIGIBLE": "INELIGIBLE",
     "AUDIT_READY": "AUDIT_READY",
@@ -1100,7 +1113,7 @@ def append_active_prospect_filter(clauses: list[str], params: list[Any]) -> None
 
 
 def append_trash_prospect_filter(clauses: list[str], params: list[Any]) -> None:
-    status_placeholders = ",".join("?" for _ in TRASH_STATUSES)
+    status_placeholders = ",".join("?" for _ in TRASH_VISIBLE_STATUSES)
     qualification_placeholders = ",".join("?" for _ in TRASH_QUALIFICATION_STATUSES)
     clauses.append(
         "("
@@ -1108,7 +1121,7 @@ def append_trash_prospect_filter(clauses: list[str], params: list[Any]) -> None:
         f"OR UPPER(COALESCE(qualification_status, '')) IN ({qualification_placeholders})"
         ")"
     )
-    params.extend(TRASH_STATUSES)
+    params.extend(TRASH_VISIBLE_STATUSES)
     params.extend(TRASH_QUALIFICATION_STATUSES)
 
 
@@ -1158,11 +1171,102 @@ def _trash_due_label(value: Any) -> str:
     return f"{hours} hours"
 
 
+def normalize_trash_category(value: Any) -> str:
+    category = _normalize_token(value).lower()
+    allowed = {key for key, _label in TRASH_CATEGORY_OPTIONS}
+    return category if category in allowed else "all"
+
+
+def _fallback_trash_reason(row: dict[str, Any]) -> str:
+    status = _normalize_token(row.get("status"))
+    qualification_status = _normalize_token(row.get("qualification_status"))
+    if status == "CLOSED_LOST":
+        return "closed_lost"
+    if status == "INELIGIBLE" or qualification_status == "DISQUALIFIED":
+        return "automated_eligibility_filter"
+    if status == "REJECTED_REVIEW":
+        return "manual_review_reject"
+    if status == "DISCARDED":
+        return "crm_stage_discarded"
+    return "legacy_rejected_or_discarded"
+
+
+def _trash_category_for_row(row: dict[str, Any], trash: dict[str, Any] | None = None) -> str:
+    status = _normalize_token(row.get("status"))
+    qualification_status = _normalize_token(row.get("qualification_status"))
+    reason = _normalize_token((trash or {}).get("reason")).lower()
+    if status == "CLOSED_LOST" or reason == "closed_lost":
+        return "closed_lost"
+    if reason in {"manual_review_reject", "crm_stage_discarded", "quick_deleted"}:
+        return "manual_deleted"
+    if status in {"REJECTED_REVIEW", "DISCARDED"}:
+        return "manual_deleted"
+    if (
+        reason in {"automated_eligibility_filter", "places_disqualification"}
+        or reason.startswith("automated")
+        or status == "INELIGIBLE"
+        or qualification_status == "DISQUALIFIED"
+    ):
+        return "system_deleted"
+    return "legacy"
+
+
+def _trash_detail_lines(row: dict[str, Any], metadata: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        text = str(value or "").strip()
+        if not text:
+            return
+        key = text.lower()
+        if key not in seen:
+            seen.add(key)
+            lines.append(text)
+
+    pre_audit = metadata.get("pre_audit_eligibility")
+    pre_audit = pre_audit if isinstance(pre_audit, dict) else {}
+    for reason in pre_audit.get("forced_reasons") or []:
+        add(reason)
+
+    reason_items = pre_audit.get("all_reasons") or pre_audit.get("top_reasons") or []
+    if isinstance(reason_items, list):
+        for item in reason_items:
+            if isinstance(item, dict):
+                reason = str(item.get("reason") or "").strip()
+                points = int_value(item.get("points"), default=0)
+                suffix = f" ({points:+})" if points else ""
+                add(f"{reason}{suffix}")
+            else:
+                add(item)
+
+    franchise = pre_audit.get("franchise_exclusion") or metadata.get("franchise_exclusion")
+    if isinstance(franchise, dict) and franchise.get("is_excluded"):
+        match = (
+            franchise.get("matched_name")
+            or franchise.get("matched_domain")
+            or franchise.get("matched_regex")
+            or "configured exclusion"
+        )
+        add(franchise.get("reason") or f"franchise/national-chain exclusion: {match}")
+
+    add(metadata.get("disqualification_reason"))
+    if not lines:
+        status = _normalize_token(row.get("status"))
+        qualification_status = _normalize_token(row.get("qualification_status"))
+        if status == "CLOSED_LOST":
+            add("closed_lost")
+        elif status == "INELIGIBLE" or qualification_status == "DISQUALIFIED":
+            add("automated eligibility filter")
+    return lines
+
+
 def mark_prospect_trashed(
     connection: sqlite3.Connection,
     *,
     prospect_id: int,
     reason: str,
+    category: str | None = None,
     previous: dict[str, Any] | sqlite3.Row | None = None,
 ) -> None:
     row = previous or connection.execute(
@@ -1179,6 +1283,7 @@ def mark_prospect_trashed(
         **trash,
         "is_trashed": True,
         "reason": reason,
+        "category": category or trash.get("category") or _trash_category_for_row(current, {"reason": reason}),
         "trashed_at": trash.get("trashed_at") or now,
         "media_delete_after": trash.get("media_delete_after") or delete_after,
         "media_retention_days": TRASH_MEDIA_RETENTION_DAYS,
@@ -1301,7 +1406,12 @@ def restore_trashed_prospect(connection: sqlite3.Connection, prospect: dict[str,
     )
 
 
-def purge_due_trash_media(connection: sqlite3.Connection, *, market: str = "") -> dict[str, int]:
+def purge_due_trash_media(
+    connection: sqlite3.Connection,
+    *,
+    market: str = "",
+    category: str = "all",
+) -> dict[str, int]:
     clauses: list[str] = []
     params: list[Any] = []
     append_trash_prospect_filter(clauses, params)
@@ -1319,20 +1429,18 @@ def purge_due_trash_media(connection: sqlite3.Connection, *, market: str = "") -
     prospects_purged = 0
     files_deleted = 0
     artifacts_marked = 0
+    normalized_category = normalize_trash_category(category)
     for prospect in rows:
         metadata = _metadata_dict(prospect.get("metadata_json"))
         trash = metadata.get("trash") if isinstance(metadata.get("trash"), dict) else {}
         if not trash:
             trashed_at = prospect.get("human_reviewed_at") or prospect.get("updated_at")
             trashed_dt = _parse_utc_datetime(trashed_at)
-            status = _normalize_token(prospect.get("status"))
-            qualification_status = _normalize_token(prospect.get("qualification_status"))
-            reason = "automated_eligibility_filter" if (
-                status == "INELIGIBLE" or qualification_status == "DISQUALIFIED"
-            ) else "legacy_rejected_or_discarded"
+            reason = _fallback_trash_reason(prospect)
             trash = {
                 "is_trashed": True,
                 "reason": reason,
+                "category": _trash_category_for_row(prospect, {"reason": reason}),
                 "trashed_at": trashed_at,
                 "media_delete_after": (
                     (trashed_dt + timedelta(days=TRASH_MEDIA_RETENTION_DAYS))
@@ -1343,6 +1451,11 @@ def purge_due_trash_media(connection: sqlite3.Connection, *, market: str = "") -
                 ),
                 "media_retention_days": TRASH_MEDIA_RETENTION_DAYS,
             }
+        if (
+            normalized_category != "all"
+            and _trash_category_for_row(prospect, trash) != normalized_category
+        ):
+            continue
         due_at = _parse_utc_datetime(trash.get("media_delete_after"))
         if due_at is None or due_at > now_dt or trash.get("media_purged_at"):
             continue
@@ -2381,12 +2494,28 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     @app.get("/trash")
     def trash_can() -> str:
         selected_market = selected_market_from_request()
+        selected_category = normalize_trash_category(request.args.get("category"))
+        summary = load_trash_summary(selected_market)
+        rows = load_trash_rows(selected_market, selected_category)
+        summary["selected_count"] = len(rows)
+        summary["selected_media_due"] = sum(1 for row in rows if row.get("trash_can_purge"))
         return render_template(
             "dashboard/trash.html",
             active_page="trash",
             market_filter=market_filter_context(selected_market),
-            rows=load_trash_rows(selected_market),
-            summary=load_trash_summary(selected_market),
+            category_filter={
+                "selected": selected_category,
+                "options": [
+                    {
+                        "value": key,
+                        "label": label,
+                        "count": summary.get("category_counts", {}).get(key, 0),
+                    }
+                    for key, label in TRASH_CATEGORY_OPTIONS
+                ],
+            },
+            rows=rows,
+            summary=summary,
             retention_days=TRASH_MEDIA_RETENTION_DAYS,
             message=trash_message_from_code(request.args.get("result")),
         )
@@ -2395,23 +2524,35 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     def restore_trash(prospect_id: int):
         prospect = require_prospect_access(prospect_id)
         selected_market = request.form.get("market", "").strip()
+        selected_category = normalize_trash_category(request.form.get("category"))
         connection = get_connection()
         restore_trashed_prospect(connection, prospect)
         connection.commit()
+        redirect_args = {"result": "restored"}
         if selected_market:
-            return redirect(url_for("trash_can", market=selected_market, result="restored"))
-        return redirect(url_for("trash_can", result="restored"))
+            redirect_args["market"] = selected_market
+        if selected_category != "all":
+            redirect_args["category"] = selected_category
+        return redirect(url_for("trash_can", **redirect_args))
 
     @app.post("/trash/purge-media")
     def purge_trash_media():
         selected_market = request.form.get("market", "").strip()
+        selected_category = normalize_trash_category(request.form.get("category"))
         connection = get_connection()
-        result = purge_due_trash_media(connection, market=selected_market)
+        result = purge_due_trash_media(
+            connection,
+            market=selected_market,
+            category=selected_category,
+        )
         connection.commit()
         code = f"purged:{result['prospects_purged']}:{result['files_deleted']}"
+        redirect_args = {"result": code}
         if selected_market:
-            return redirect(url_for("trash_can", market=selected_market, result=code))
-        return redirect(url_for("trash_can", result=code))
+            redirect_args["market"] = selected_market
+        if selected_category != "all":
+            redirect_args["category"] = selected_category
+        return redirect(url_for("trash_can", **redirect_args))
 
     @app.get("/crm")
     def crm() -> str:
@@ -3351,6 +3492,11 @@ def load_pipeline_counts(market: str = "") -> list[dict[str, Any]]:
     connection = get_connection()
     count_queries = {
         "DISCOVERED": "qualification_status = 'DISCOVERED'",
+        "NO_WEBSITE": (
+            "qualification_status = 'NO_WEBSITE' "
+            "OR status = 'NO_WEBSITE' "
+            "OR next_action = 'COLD_CALL_WEBSITE'"
+        ),
         "QUALIFIED": "qualification_status = 'QUALIFIED'",
         "DISQUALIFIED": "qualification_status = 'DISQUALIFIED'",
         "ELIGIBLE_FOR_AUDIT": "status = 'ELIGIBLE_FOR_AUDIT' OR next_action = 'RUN_AUDIT'",
@@ -3385,6 +3531,7 @@ def load_run_counts(market: str = "") -> list[dict[str, Any]]:
     keys = [
         ("total", "Total Prospects"),
         ("discovered_new", "Discovered/New"),
+        ("no_website", "No Website"),
         ("qualified_eligible", "Qualified / Eligible"),
         ("ineligible", "Ineligible"),
         ("audited", "Audited"),
@@ -3418,7 +3565,9 @@ def load_run_counts(market: str = "") -> list[dict[str, Any]]:
         next_action = _normalize_token(row["next_action"])
 
         counts["total"] += 1
-        if stage in {"DISCARDED", "REJECTED_REVIEW", "CLOSED_LOST"}:
+        if stage == "NO_WEBSITE":
+            bucket = "no_website"
+        elif stage in {"DISCARDED", "REJECTED_REVIEW", "CLOSED_LOST"}:
             bucket = "discarded_rejected"
         elif stage == "INELIGIBLE" or qualification_status == "DISQUALIFIED":
             bucket = "ineligible"
@@ -3625,6 +3774,7 @@ def load_distinct_values(column: str, market: str = "") -> list[str]:
 def empty_market_summary_counts() -> dict[str, int]:
     return {
         "total": 0,
+        "no_website": 0,
         "eligible": 0,
         "pending_review": 0,
         "approved_for_outreach": 0,
@@ -3636,7 +3786,9 @@ def empty_market_summary_counts() -> dict[str, int]:
 
 def add_stage_to_market_summary(counts: dict[str, int], stage: str) -> None:
     counts["total"] += 1
-    if stage == "ELIGIBLE_FOR_AUDIT":
+    if stage == "NO_WEBSITE":
+        counts["no_website"] += 1
+    elif stage == "ELIGIBLE_FOR_AUDIT":
         counts["eligible"] += 1
     elif stage == "PENDING_REVIEW":
         counts["pending_review"] += 1
@@ -3856,14 +4008,11 @@ def _enrich_trash_row(row: dict[str, Any]) -> dict[str, Any]:
     metadata = _metadata_dict(row.get("metadata_json"))
     trash = metadata.get("trash") if isinstance(metadata.get("trash"), dict) else {}
     if not trash:
-        status = _normalize_token(row.get("status"))
-        qualification_status = _normalize_token(row.get("qualification_status"))
-        reason = "automated_eligibility_filter" if (
-            status == "INELIGIBLE" or qualification_status == "DISQUALIFIED"
-        ) else "legacy_rejected_or_discarded"
+        reason = _fallback_trash_reason(row)
         trash = {
             "is_trashed": True,
             "reason": reason,
+            "category": _trash_category_for_row(row, {"reason": reason}),
             "trashed_at": row.get("human_reviewed_at") or row.get("updated_at"),
             "media_retention_days": TRASH_MEDIA_RETENTION_DAYS,
         }
@@ -3876,6 +4025,11 @@ def _enrich_trash_row(row: dict[str, Any]) -> dict[str, Any]:
     row["metadata"] = metadata
     row["trash"] = trash
     row["trash_reason"] = trash.get("reason") or "rejected_or_discarded"
+    stored_category = normalize_trash_category(trash.get("category"))
+    row["trash_category"] = (
+        stored_category if stored_category != "all" else _trash_category_for_row(row, trash)
+    )
+    row["trash_detail_lines"] = _trash_detail_lines(row, metadata)
     row["trash_trashed_at"] = trash.get("trashed_at") or row.get("updated_at")
     row["trash_media_delete_after"] = trash.get("media_delete_after")
     row["trash_media_due_label"] = _trash_due_label(trash.get("media_delete_after"))
@@ -3889,7 +4043,7 @@ def _enrich_trash_row(row: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
-def load_trash_rows(market: str = "") -> list[dict[str, Any]]:
+def load_trash_rows(market: str = "", category: str = "all") -> list[dict[str, Any]]:
     clauses = ["1 = 1"]
     params: list[Any] = []
     append_trash_prospect_filter(clauses, params)
@@ -3903,15 +4057,28 @@ def load_trash_rows(market: str = "") -> list[dict[str, Any]]:
         """,
         params,
     ).fetchall()
-    return [_enrich_trash_row(_row_to_dict(row)) for row in rows]
+    enriched = [_enrich_trash_row(_row_to_dict(row)) for row in rows]
+    normalized_category = normalize_trash_category(category)
+    if normalized_category != "all":
+        enriched = [
+            row for row in enriched
+            if row.get("trash_category") == normalized_category
+        ]
+    return enriched
 
 
-def load_trash_summary(market: str = "") -> dict[str, int]:
+def load_trash_summary(market: str = "") -> dict[str, Any]:
     rows = load_trash_rows(market)
+    category_counts = {key: 0 for key, _label in TRASH_CATEGORY_OPTIONS}
+    category_counts["all"] = len(rows)
+    for row in rows:
+        category = row.get("trash_category") or "legacy"
+        category_counts[category] = category_counts.get(category, 0) + 1
     return {
         "count": len(rows),
         "media_due": sum(1 for row in rows if row.get("trash_can_purge")),
         "media_purged": sum(1 for row in rows if row.get("trash_media_purged_at")),
+        "category_counts": category_counts,
     }
 
 
@@ -7256,6 +7423,7 @@ def apply_review_decision(
             connection,
             prospect_id=prospect_id,
             reason="manual_review_reject",
+            category="manual_deleted",
             previous=current_prospect,
         )
     elif action in {"approve", "hold"}:
@@ -7315,9 +7483,18 @@ def apply_crm_stage_change(
             connection,
             prospect_id=prospect["id"],
             reason="crm_stage_discarded",
+            category="manual_deleted",
             previous=prospect,
         )
-    elif new_status not in TRASH_STATUSES:
+    elif new_status == "CLOSED_LOST":
+        mark_prospect_trashed(
+            connection,
+            prospect_id=prospect["id"],
+            reason="closed_lost",
+            category="closed_lost",
+            previous=prospect,
+        )
+    elif new_status not in TRASH_VISIBLE_STATUSES:
         clear_trash_metadata(connection, prospect["id"])
 
 

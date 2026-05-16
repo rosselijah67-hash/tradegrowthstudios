@@ -874,7 +874,28 @@ button.table-action {
 }
 
 .trash-table {
-  min-width: 1080px;
+  min-width: 1180px;
+}
+
+.trash-reason-cell {
+  min-width: 220px;
+  max-width: 340px;
+}
+
+.trash-reason-cell strong {
+  display: block;
+  margin-bottom: 5px;
+}
+
+.trash-reason-list {
+  margin: 0;
+  padding-left: 17px;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.trash-reason-list li+li {
+  margin-top: 3px;
 }
 
 button:disabled,

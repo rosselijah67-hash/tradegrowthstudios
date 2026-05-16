@@ -9,6 +9,7 @@ class QualificationStatus:
     DISCOVERED = "DISCOVERED"
     QUALIFIED = "QUALIFIED"
     DISQUALIFIED = "DISQUALIFIED"
+    NO_WEBSITE = "NO_WEBSITE"
 
 
 class AuditDataStatus:
@@ -33,6 +34,7 @@ class HumanReviewDecision:
 
 class ProspectStatus:
     NEW = "NEW"
+    NO_WEBSITE = "NO_WEBSITE"
     ELIGIBLE_FOR_AUDIT = "ELIGIBLE_FOR_AUDIT"
     INELIGIBLE = "INELIGIBLE"
     AUDIT_READY = "AUDIT_READY"
@@ -52,6 +54,7 @@ class ProspectStatus:
 
 
 class NextAction:
+    COLD_CALL_WEBSITE = "COLD_CALL_WEBSITE"
     RUN_AUDIT = "RUN_AUDIT"
     HUMAN_REVIEW = "HUMAN_REVIEW"
     APPROVED_FOR_OUTREACH = "APPROVED_FOR_OUTREACH"
@@ -80,6 +83,7 @@ class OutreachEventStatus:
 
 
 TERMINAL_CRM_STATUSES = {
+    ProspectStatus.NO_WEBSITE,
     ProspectStatus.INELIGIBLE,
     ProspectStatus.REJECTED_REVIEW,
     ProspectStatus.CLOSED_WON,
@@ -91,6 +95,7 @@ TERMINAL_CRM_STATUSES = {
 
 PIPELINE_STAGE_BUCKETS = [
     ProspectStatus.NEW,
+    ProspectStatus.NO_WEBSITE,
     ProspectStatus.ELIGIBLE_FOR_AUDIT,
     ProspectStatus.INELIGIBLE,
     ProspectStatus.AUDIT_READY,
@@ -110,6 +115,7 @@ PIPELINE_STAGE_BUCKETS = [
 ]
 
 CRM_STAGES = [
+    (ProspectStatus.NO_WEBSITE, "No Website"),
     (ProspectStatus.DISCARDED, "Discarded"),
     (ProspectStatus.PENDING_REVIEW, "Pending Manual Review"),
     (ProspectStatus.APPROVED_FOR_OUTREACH, "Approved for Outreach"),
@@ -125,6 +131,7 @@ CRM_STAGES = [
 ]
 
 CRM_NEXT_ACTIONS = {
+    ProspectStatus.NO_WEBSITE: NextAction.COLD_CALL_WEBSITE,
     ProspectStatus.DISCARDED: NextAction.NONE,
     ProspectStatus.PENDING_REVIEW: NextAction.HUMAN_REVIEW,
     ProspectStatus.APPROVED_FOR_OUTREACH: NextAction.APPROVED_FOR_OUTREACH,
@@ -142,6 +149,9 @@ CRM_NEXT_ACTIONS = {
 STATUS_ALIASES = {
     "NEW": ProspectStatus.NEW,
     "DISCOVERED": ProspectStatus.NEW,
+    "NO_WEBSITE": ProspectStatus.NO_WEBSITE,
+    "MISSING_WEBSITE": ProspectStatus.NO_WEBSITE,
+    "COLD_CALL_WEBSITE": ProspectStatus.NO_WEBSITE,
     "ELIGIBLE_FOR_AUDIT": ProspectStatus.ELIGIBLE_FOR_AUDIT,
     "INELIGIBLE": ProspectStatus.INELIGIBLE,
     "DISQUALIFIED": ProspectStatus.INELIGIBLE,
