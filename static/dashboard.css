@@ -1627,6 +1627,45 @@ dd {
   margin-bottom: 24px;
 }
 
+.admin-save-panel {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+  border-color: #b7c8d3;
+  background: #fbfcfd;
+}
+
+.admin-save-panel p {
+  margin-bottom: 6px;
+}
+
+.admin-save-actions,
+.admin-save-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.admin-save-actions {
+  min-width: min(100%, 360px);
+}
+
+.admin-save-footer {
+  padding: 14px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-muted);
+}
+
+.admin-readonly-field {
+  background: var(--surface-strong);
+  color: var(--muted);
+  font-weight: 800;
+}
+
 .admin-form,
 .admin-form-grid {
   display: grid;
@@ -2512,7 +2551,8 @@ dd {
 
   .page-heading,
   .case-header,
-  .section-header {
+  .section-header,
+  .admin-save-panel {
     align-items: stretch;
     flex-direction: column;
   }

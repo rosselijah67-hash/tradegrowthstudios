@@ -983,14 +983,21 @@ def default_password_hash_env(username: str) -> str:
     return f"AUTH_{safe_username}_PASSWORD_HASH"
 
 
-def parse_admin_user_form(form: Any, *, existing_username: str | None = None) -> tuple[str, dict[str, Any]]:
-    username = normalize_admin_username(existing_username or form.get("username"))
-    display_name = str(form.get("display_name") or username).strip() or username
-    role = str(form.get("role") or "user").strip().lower()
+def build_admin_user_details(
+    username: str,
+    *,
+    display_name: Any,
+    role: Any,
+    allowed_states: Any,
+    password_hash_env: Any,
+) -> dict[str, Any]:
+    username = normalize_admin_username(username)
+    display_name = str(display_name or username).strip() or username
+    role = str(role or "user").strip().lower()
     if role not in {"admin", "user"}:
         raise ValueError("Role must be admin or user.")
 
-    password_hash_env = str(form.get("password_hash_env") or "").strip().upper()
+    password_hash_env = str(password_hash_env or "").strip().upper()
     if not password_hash_env:
         password_hash_env = default_password_hash_env(username)
     if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,80}", password_hash_env):
@@ -1001,16 +1008,27 @@ def parse_admin_user_form(form: Any, *, existing_username: str | None = None) ->
     else:
         allowed_states = [
             state_code
-            for state_code in territories.normalize_state_list(form.get("allowed_states"))
+            for state_code in territories.normalize_state_list(allowed_states)
             if state_code != "*"
         ]
 
-    return username, {
+    return {
         "role": role,
         "display_name": display_name,
         "allowed_states": allowed_states,
         "password_hash_env": password_hash_env,
     }
+
+
+def parse_admin_user_form(form: Any, *, existing_username: str | None = None) -> tuple[str, dict[str, Any]]:
+    username = normalize_admin_username(existing_username or form.get("username"))
+    return username, build_admin_user_details(
+        username,
+        display_name=form.get("display_name"),
+        role=form.get("role"),
+        allowed_states=form.get("allowed_states"),
+        password_hash_env=form.get("password_hash_env"),
+    )
 
 
 def validate_admin_users_document(data: dict[str, Any]) -> dict[str, Any]:
@@ -1059,6 +1077,68 @@ def save_admin_users_document(data: dict[str, Any]) -> dict[str, Any]:
     normalized = validate_admin_users_document(data)
     write_users_document(normalized)
     return normalized
+
+
+def build_admin_save_all_document(form: Any) -> tuple[dict[str, Any], str | None]:
+    current_config = load_users_document()
+    current_users = current_config.get("users", {})
+    if not isinstance(current_users, dict):
+        raise ValueError("Users document must contain a users mapping.")
+
+    updated: dict[str, Any] = {"users": {}}
+    existing_usernames: list[str] = []
+    for raw_username in form.getlist("existing_username"):
+        username = normalize_admin_username(raw_username)
+        if username not in current_users:
+            raise ValueError(f"User {username} no longer exists.")
+        if username in existing_usernames:
+            continue
+        existing_usernames.append(username)
+
+    for username in existing_usernames:
+        current_user = current_users.get(username) if isinstance(current_users.get(username), dict) else {}
+        user_details = build_admin_user_details(
+            username,
+            display_name=form.get(f"user_{username}_display_name"),
+            role=form.get(f"user_{username}_role"),
+            allowed_states=current_user.get("allowed_states"),
+            password_hash_env=form.get(f"user_{username}_password_hash_env"),
+        )
+        if user_details["role"] != "admin":
+            user_details["allowed_states"] = []
+        updated["users"][username] = user_details
+
+    new_username_raw = str(form.get("new_username") or "").strip()
+    new_username: str | None = None
+    if new_username_raw:
+        new_username = normalize_admin_username(new_username_raw)
+        if new_username in updated["users"]:
+            raise ValueError(f"User {new_username} already exists.")
+        new_details = build_admin_user_details(
+            new_username,
+            display_name=form.get("new_display_name"),
+            role=form.get("new_role"),
+            allowed_states=form.get("new_allowed_states"),
+            password_hash_env=form.get("new_password_hash_env"),
+        )
+        updated["users"][new_username] = new_details
+
+    for state_code in sorted(territories.STATE_CODE_TO_NAME):
+        owner_raw = str(form.get(f"territory_owner_{state_code}") or "").strip()
+        if not owner_raw:
+            continue
+        owner_username = normalize_admin_username(owner_raw)
+        owner = updated["users"].get(owner_username)
+        if not owner:
+            raise ValueError(f"Territory owner {owner_username} does not exist.")
+        if str(owner.get("role") or "").strip().lower() == "admin":
+            raise ValueError("Admin already has all states; assign territories to non-admin users.")
+        owner_states = territories.normalize_state_list(owner.get("allowed_states"))
+        if state_code not in owner_states:
+            owner_states.append(state_code)
+        owner["allowed_states"] = sorted(owner_states)
+
+    return updated, new_username
 
 
 def owner_by_state_from_users(users_config: dict[str, Any]) -> dict[str, str]:
@@ -1204,8 +1284,11 @@ def admin_result_message() -> dict[str, str] | None:
     return {"status": "error" if status == "error" else "success", "message": message}
 
 
-def admin_redirect(message: str, *, status: str = "success") -> Any:
-    return redirect(url_for("admin_home", message=message, status=status))
+def admin_redirect(message: str, *, status: str = "success", download_config: bool = False) -> Any:
+    params: dict[str, str] = {"message": message, "status": status}
+    if download_config and status != "error":
+        params["download_config"] = "1"
+    return redirect(url_for("admin_home", **params))
 
 
 def admin_territory_diagnostics() -> dict[str, Any]:
@@ -2593,6 +2676,46 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             users_config_path=users_config_path(),
             hash_generator_path=PROJECT_ROOT / "generate_user_password_hash.bat",
             message=admin_result_message(),
+            download_config_after_save=request.args.get("download_config") == "1",
+        )
+
+    @app.get("/admin/users-config/download")
+    @login_required
+    @auth_service.admin_required
+    def admin_download_users_config():
+        path = users_config_path()
+        if not path.exists():
+            abort(404)
+        return send_file(
+            path,
+            as_attachment=True,
+            download_name="users.yaml",
+            mimetype="application/x-yaml",
+        )
+
+    @app.post("/admin/save-all")
+    @login_required
+    @auth_service.admin_required
+    def admin_save_all():
+        try:
+            config, new_username = build_admin_save_all_document(request.form)
+            normalized = save_admin_users_document(config)
+            connection = get_connection()
+            stats = reconcile_owner_fields(connection, normalized)
+            connection.commit()
+        except Exception as exc:
+            return admin_redirect(str(exc), status="error")
+
+        changed = sum(stats.values())
+        user_count = len(normalized.get("users", {}))
+        new_user_note = (
+            f" Added {new_username}; set {normalized['users'][new_username]['password_hash_env']} in Railway before login."
+            if new_username
+            else ""
+        )
+        return admin_redirect(
+            f"Saved {user_count} users and territory assignments. Synced {changed} ownership rows.{new_user_note}",
+            download_config=True,
         )
 
     @app.post("/admin/users/add")

@@ -26,146 +26,179 @@
   </div>
 {% endif %}
 
-<section class="summary-grid admin-tool-grid">
-  <div class="panel">
-    <div class="panel-header">
-      <h2>Add User</h2>
-    </div>
-    <form class="admin-form" method="post" action="{{ url_for('admin_add_user') }}">
-      <label>
-        <span>Username</span>
-        <input name="username" placeholder="NEWUSER" required>
-      </label>
-      <label>
-        <span>Display Name</span>
-        <input name="display_name" placeholder="Sales User">
-      </label>
-      <label>
-        <span>Role</span>
-        <select name="role">
-          <option value="user">User</option>
-          <option value="admin">Admin</option>
-        </select>
-      </label>
-      <label>
-        <span>Allowed States</span>
-        <input name="allowed_states" placeholder="OH, KY, TX">
-      </label>
-      <label>
-        <span>Password Hash Env</span>
-        <input name="password_hash_env" placeholder="AUTH_NEWUSER_PASSWORD_HASH">
-      </label>
-      <button class="button primary" type="submit">Add User</button>
-    </form>
-  </div>
-
-  <div class="panel">
-    <div class="panel-header">
-      <h2>Password Hashes</h2>
-    </div>
-    <div class="admin-command-box">
-      <span>Generator</span>
-      <code>{{ hash_generator_path }}</code>
-    </div>
-    <p class="muted">Run the generator, then put the printed hash value into the matching Railway variable.</p>
-  </div>
-</section>
-
-<section class="table-panel admin-diagnostics-panel">
-  <div class="panel-header">
+<form
+  id="admin-batch-form"
+  method="post"
+  action="{{ url_for('admin_save_all') }}"
+  data-auto-download-url="{% if download_config_after_save %}{{ url_for('admin_download_users_config') }}{% endif %}"
+>
+  <section class="panel admin-save-panel" aria-live="polite">
     <div>
-      <h2>Users</h2>
-      <p>Changing roles or states rewrites config/users.yaml and syncs ownership columns.</p>
+      <h2>Session Save Required</h2>
+      <p>
+        Make every user and territory edit for this admin session, then click Save All.
+        If you leave this page with unsaved edits, the browser will warn you before navigation.
+        After Save All, config/users.yaml downloads automatically so you can overwrite your local file and commit it.
+      </p>
+      <p class="muted">
+        Password hashes still stay in Railway Variables; this downloaded config should never contain plaintext passwords or hash values.
+      </p>
     </div>
-  </div>
-  <div class="admin-user-card-grid">
-    {% for user in users %}
-      <form class="panel admin-user-card" method="post" action="{{ url_for('admin_update_user', username=user.username) }}">
-        <div class="panel-header">
-          <div>
-            <h3>{{ user.username }}</h3>
-            <p>{{ user.prospect_count }} prospects, {{ user.owned_market_count }} markets</p>
+    <div class="admin-save-actions">
+      <span id="admin-dirty-indicator" class="pill status-pass">No unsaved changes</span>
+      {% if download_config_after_save %}
+        <a
+          id="admin-config-download-link"
+          class="button"
+          href="{{ url_for('admin_download_users_config') }}"
+          download
+        >Download config/users.yaml</a>
+      {% endif %}
+      <button class="button primary" type="submit">Save All</button>
+    </div>
+  </section>
+
+  <section class="summary-grid admin-tool-grid">
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Add User</h2>
+      </div>
+      <div class="admin-form">
+        <label>
+          <span>Username</span>
+          <input name="new_username" placeholder="NEWUSER">
+        </label>
+        <label>
+          <span>Display Name</span>
+          <input name="new_display_name" placeholder="Sales User">
+        </label>
+        <label>
+          <span>Role</span>
+          <select name="new_role">
+            <option value="user">User</option>
+            <option value="admin">Admin</option>
+          </select>
+        </label>
+        <label>
+          <span>Initial Allowed States</span>
+          <input name="new_allowed_states" placeholder="OH, KY, TX">
+        </label>
+        <label>
+          <span>Password Hash Env</span>
+          <input name="new_password_hash_env" placeholder="AUTH_NEWUSER_PASSWORD_HASH">
+        </label>
+        <p class="form-help">
+          Save All creates the user. If the new user needs territories immediately, list them here first; after save, manage them in the territory table.
+        </p>
+      </div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-header">
+        <h2>Password Hashes</h2>
+      </div>
+      <div class="admin-command-box">
+        <span>Generator</span>
+        <code>{{ hash_generator_path }}</code>
+      </div>
+      <p class="muted">Run the generator, then put the printed hash value into the matching Railway variable.</p>
+    </div>
+  </section>
+
+  <section class="table-panel admin-diagnostics-panel">
+    <div class="panel-header">
+      <div>
+        <h2>Users</h2>
+        <p>Identity and role edits are saved together with territory assignments when you click Save All.</p>
+      </div>
+    </div>
+    <div class="admin-user-card-grid">
+      {% for user in users %}
+        <div class="panel admin-user-card">
+          <input type="hidden" name="existing_username" value="{{ user.username }}">
+          <div class="panel-header">
+            <div>
+              <h3>{{ user.username }}</h3>
+              <p>{{ user.prospect_count }} prospects, {{ user.owned_market_count }} markets</p>
+            </div>
+            {% if user.password_hash_present %}
+              <span class="pill status-pass">Hash env set</span>
+            {% else %}
+              <span class="pill status-fail">Hash env missing</span>
+            {% endif %}
           </div>
-          {% if user.password_hash_present %}
-            <span class="pill status-pass">Hash env set</span>
-          {% else %}
-            <span class="pill status-fail">Hash env missing</span>
-          {% endif %}
+          <div class="admin-form-grid">
+            <label>
+              <span>Display Name</span>
+              <input name="user_{{ user.username }}_display_name" value="{{ user.display_name }}">
+            </label>
+            <label>
+              <span>Role</span>
+              <select name="user_{{ user.username }}_role">
+                <option value="user" {% if user.role == 'user' %}selected{% endif %}>User</option>
+                <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>Admin</option>
+              </select>
+            </label>
+            <label>
+              <span>Territories</span>
+              <input class="admin-readonly-field" value="{{ user.allowed_states_input if user.role != 'admin' else 'ALL STATES' }}" readonly>
+            </label>
+            <label>
+              <span>Password Hash Env</span>
+              <input name="user_{{ user.username }}_password_hash_env" value="{{ user.password_hash_env }}">
+            </label>
+          </div>
+          <div class="admin-card-stats">
+            <span><strong>{{ user.pending_review_count }}</strong> pending review</span>
+            <span><strong>{{ user.outreach_drafted_count }}</strong> drafted</span>
+            <span><strong>{{ user.outreach_sent_count }}</strong> sent</span>
+          </div>
+          <p class="form-help">Territories for this user are controlled in the assignment table below.</p>
         </div>
-        <div class="admin-form-grid">
-          <label>
-            <span>Display Name</span>
-            <input name="display_name" value="{{ user.display_name }}">
-          </label>
-          <label>
-            <span>Role</span>
-            <select name="role">
-              <option value="user" {% if user.role == 'user' %}selected{% endif %}>User</option>
-              <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>Admin</option>
-            </select>
-          </label>
-          <label>
-            <span>Allowed States</span>
-            <input name="allowed_states" value="{{ user.allowed_states_input }}" {% if user.role == 'admin' %}placeholder="ALL STATES"{% endif %}>
-          </label>
-          <label>
-            <span>Password Hash Env</span>
-            <input name="password_hash_env" value="{{ user.password_hash_env }}">
-          </label>
-        </div>
-        <div class="admin-card-stats">
-          <span><strong>{{ user.pending_review_count }}</strong> pending review</span>
-          <span><strong>{{ user.outreach_drafted_count }}</strong> drafted</span>
-          <span><strong>{{ user.outreach_sent_count }}</strong> sent</span>
-        </div>
-        <button class="button primary" type="submit">Save User</button>
-      </form>
-    {% else %}
-      <p class="empty">No users configured.</p>
-    {% endfor %}
-  </div>
-</section>
-
-<section class="table-panel admin-diagnostics-panel">
-  <div class="panel-header">
-    <div>
-      <h2>Territory Assignment</h2>
-      <p>State moves update user permissions and synchronize lead, quote, queue, and job state ownership.</p>
+      {% else %}
+        <p class="empty">No users configured.</p>
+      {% endfor %}
     </div>
-  </div>
-  <div class="table-wrap">
-    <table class="compact-table admin-territories-table">
-      <thead>
-        <tr>
-          <th>State</th>
-          <th>Owner</th>
-          <th>Markets</th>
-          <th>Prospects</th>
-          <th>Assign</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for territory in territory_rows %}
+  </section>
+
+  <section class="table-panel admin-diagnostics-panel">
+    <div class="panel-header">
+      <div>
+        <h2>Territory Assignment</h2>
+        <p>State moves update user permissions and synchronize lead, quote, queue, and job state ownership on Save All.</p>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table class="compact-table admin-territories-table">
+        <thead>
           <tr>
-            <td>
-              <strong>{{ territory.state }}</strong>
-              <small>{{ territory.state_name }}</small>
-            </td>
-            <td>{{ territory.owner_username or "Unassigned" }}</td>
-            <td>
-              <div class="stage-chip-list">
-                {% for market in territory.markets %}
-                  <span>{{ market.label }} <code>{{ market.key }}</code></span>
-                {% else %}
-                  <span class="empty">No configured markets</span>
-                {% endfor %}
-              </div>
-            </td>
-            <td>{{ territory.prospect_count }}</td>
-            <td>
-              <form class="inline-admin-form" method="post" action="{{ url_for('admin_assign_territory') }}">
-                <input type="hidden" name="state" value="{{ territory.state }}">
-                <select name="owner_username">
+            <th>State</th>
+            <th>Owner</th>
+            <th>Markets</th>
+            <th>Prospects</th>
+            <th>Assign</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for territory in territory_rows %}
+            <tr>
+              <td>
+                <strong>{{ territory.state }}</strong>
+                <small>{{ territory.state_name }}</small>
+              </td>
+              <td>{{ territory.owner_username or "Unassigned" }}</td>
+              <td>
+                <div class="stage-chip-list">
+                  {% for market in territory.markets %}
+                    <span>{{ market.label }} <code>{{ market.key }}</code></span>
+                  {% else %}
+                    <span class="empty">No configured markets</span>
+                  {% endfor %}
+                </div>
+              </td>
+              <td>{{ territory.prospect_count }}</td>
+              <td>
+                <select name="territory_owner_{{ territory.state }}" aria-label="Owner for {{ territory.state }}">
                   <option value="">Unassigned</option>
                   {% for user in user_options %}
                     <option value="{{ user.username }}" {% if territory.owner_username == user.username %}selected{% endif %}>
@@ -173,15 +206,18 @@
                     </option>
                   {% endfor %}
                 </select>
-                <button class="button primary" type="submit">Move</button>
-              </form>
-            </td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="admin-save-footer">
+      <span id="admin-dirty-indicator-footer" class="pill status-pass">No unsaved changes</span>
+      <button class="button primary" type="submit">Save All</button>
+    </div>
+  </section>
+</form>
 
 <section class="summary-grid">
   <div class="panel">
@@ -211,6 +247,92 @@
       <span>Users YAML</span>
       <code>{{ users_config_path }}</code>
     </div>
+    {% if download_config_after_save %}
+      <p class="form-help">The download should start automatically. Use the download button above if your browser blocked it.</p>
+    {% endif %}
   </div>
 </section>
+
+<script>
+(() => {
+  const form = document.getElementById("admin-batch-form");
+  if (!form) {
+    return;
+  }
+
+  const dirtyIndicators = [
+    document.getElementById("admin-dirty-indicator"),
+    document.getElementById("admin-dirty-indicator-footer"),
+  ].filter(Boolean);
+  const warningMessage = "You have unsaved admin changes. Click Save All before leaving this page.";
+  const watchedFields = Array.from(form.querySelectorAll("input, select, textarea")).filter((field) => {
+    return field.type !== "hidden" && field.type !== "submit" && !field.readOnly;
+  });
+  let isDirty = false;
+  let isSubmitting = false;
+
+  watchedFields.forEach((field) => {
+    field.dataset.initialValue = field.value;
+  });
+
+  const setDirty = (dirty) => {
+    isDirty = dirty;
+    dirtyIndicators.forEach((indicator) => {
+      indicator.textContent = dirty ? "Unsaved changes" : "No unsaved changes";
+      indicator.classList.toggle("status-warn", dirty);
+      indicator.classList.toggle("status-pass", !dirty);
+    });
+  };
+
+  const evaluateDirty = () => {
+    setDirty(watchedFields.some((field) => field.value !== field.dataset.initialValue));
+  };
+
+  watchedFields.forEach((field) => {
+    field.addEventListener("input", evaluateDirty);
+    field.addEventListener("change", evaluateDirty);
+  });
+
+  form.addEventListener("submit", () => {
+    isSubmitting = true;
+    setDirty(false);
+  });
+
+  window.addEventListener("beforeunload", (event) => {
+    if (!isDirty || isSubmitting) {
+      return undefined;
+    }
+    event.preventDefault();
+    event.returnValue = warningMessage;
+    return warningMessage;
+  });
+
+  document.addEventListener("click", (event) => {
+    const link = event.target.closest("a[href]");
+    if (!link || !isDirty || isSubmitting || link.id === "admin-config-download-link") {
+      return;
+    }
+    const target = link.getAttribute("target");
+    if (target && target !== "_self") {
+      return;
+    }
+    if (!window.confirm(`${warningMessage}\n\nLeave without saving?`)) {
+      event.preventDefault();
+    }
+  });
+
+  const autoDownloadUrl = form.dataset.autoDownloadUrl;
+  if (autoDownloadUrl) {
+    window.setTimeout(() => {
+      const downloadLink = document.createElement("a");
+      downloadLink.href = autoDownloadUrl;
+      downloadLink.download = "users.yaml";
+      downloadLink.style.display = "none";
+      document.body.appendChild(downloadLink);
+      downloadLink.click();
+      window.setTimeout(() => downloadLink.remove(), 1000);
+    }, 250);
+  }
+})();
+</script>
 {% endblock %}
