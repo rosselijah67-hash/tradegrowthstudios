@@ -1623,6 +1623,83 @@ dd {
   gap: 14px;
 }
 
+.admin-tool-grid {
+  margin-bottom: 24px;
+}
+
+.admin-form,
+.admin-form-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.admin-form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.admin-user-card-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.admin-user-card {
+  margin: 0;
+}
+
+.admin-user-card h3 {
+  margin: 0;
+}
+
+.admin-user-card .panel-header p {
+  margin: 4px 0 0;
+}
+
+.admin-card-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.admin-card-stats span,
+.admin-command-box {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-strong);
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.admin-card-stats strong {
+  color: var(--text);
+}
+
+.admin-command-box {
+  display: grid;
+  gap: 5px;
+  overflow-wrap: anywhere;
+}
+
+.admin-command-box span {
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.inline-admin-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.inline-admin-form select {
+  min-width: 210px;
+}
+
 .market-cities,
 .stage-chip-list {
   display: flex;
@@ -2409,7 +2486,8 @@ dd {
   .quote-form-grid,
   .quote-detail-grid,
   .market-manager-grid,
-  .admin-diagnostics-grid {
+  .admin-diagnostics-grid,
+  .admin-user-card-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -2490,7 +2568,9 @@ dd {
   .contact-form,
   .contact-item,
   .timeline-item,
-  .admin-diagnostics-grid {
+  .admin-diagnostics-grid,
+  .admin-user-card-grid,
+  .admin-form-grid {
     grid-template-columns: 1fr;
   }
 

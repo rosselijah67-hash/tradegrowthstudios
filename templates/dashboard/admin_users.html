@@ -9,6 +9,7 @@
     <p>Configured users, territory ownership, and read-only data counts.</p>
   </div>
   <div class="link-list">
+    <a class="button" href="{{ url_for('admin_home') }}">Admin Home</a>
     <a class="button primary" href="{{ url_for('admin_users') }}">Users</a>
     <a class="button" href="{{ url_for('admin_territories') }}">Territories</a>
   </div>
@@ -45,6 +46,7 @@
             <td><span class="pill">{{ user.role }}</span></td>
             <td>{{ user.allowed_states }}</td>
             <td>
+              <code>{{ user.password_hash_env }}</code><br>
               {% if user.password_hash_present %}
                 <span class="pill status-pass">Yes</span>
               {% else %}

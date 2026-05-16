@@ -54,8 +54,10 @@ PIPELINE_LOG_PATH = "runs/latest/dashboard_job_log.txt"
 PIPELINE_JOB_TIMEOUT_SECONDS = 600
 OUTREACH_DRAFT_TIMEOUT_SECONDS = 120
 MARKETS_CONFIG_PATH = "config/markets.yaml"
+USERS_CONFIG_PATH = "config/users.yaml"
 UNKNOWN_MARKET_VALUE = "__unknown__"
 MARKET_KEY_PATTERN = re.compile(r"^[a-z0-9_]+$")
+ADMIN_USERNAME_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]{1,31}$")
 OUTBOUND_DEFAULT_CAMPAIGN = "intro_email"
 OUTBOUND_DEFAULT_STEP = 1
 OUTBOUND_DEFAULT_QUEUE_LIMIT = 10
@@ -392,6 +394,10 @@ def file_url_for(path: str | Path | None) -> str | None:
 
 def markets_config_path() -> Path:
     return project_path(MARKETS_CONFIG_PATH)
+
+
+def users_config_path() -> Path:
+    return project_path(USERS_CONFIG_PATH)
 
 
 def load_yaml_text(text: str) -> Any:
@@ -868,6 +874,9 @@ def admin_user_diagnostics() -> list[dict[str, Any]]:
             "display_name": user.display_name,
             "role": user.role,
             "allowed_states": dashboard_allowed_states_summary(user),
+            "allowed_states_list": list(user.allowed_states),
+            "allowed_states_input": "" if "*" in user.allowed_states else ", ".join(user.allowed_states),
+            "password_hash_env": user.password_hash_env,
             "password_hash_present": user.can_login,
             "owned_market_count": admin_owned_market_count(user, markets),
             **admin_user_prospect_counts(user),
@@ -921,6 +930,282 @@ def admin_user_prospect_counts(user: auth_service.User) -> dict[str, int]:
         elif stage == "OUTREACH_SENT":
             counts["outreach_sent_count"] += 1
     return counts
+
+
+def admin_user_config_rows() -> list[dict[str, Any]]:
+    users = admin_user_diagnostics()
+    return sorted(users, key=lambda user: (user["role"] != "admin", user["username"]))
+
+
+def admin_non_admin_user_options() -> list[dict[str, str]]:
+    config = load_users_document()
+    options = []
+    for username, user in config.get("users", {}).items():
+        if str(user.get("role") or "").strip().lower() == "admin":
+            continue
+        options.append(
+            {
+                "username": str(username),
+                "label": str(user.get("display_name") or username),
+            }
+        )
+    return sorted(options, key=lambda item: item["username"])
+
+
+def admin_state_assignment_rows() -> list[dict[str, Any]]:
+    diagnostics = admin_territory_diagnostics()
+    by_state = {row["state"]: row for row in diagnostics["territory_rows"]}
+    rows = []
+    for state_code in sorted(territories.STATE_CODE_TO_NAME):
+        row = by_state.get(state_code, {})
+        rows.append(
+            {
+                "state": state_code,
+                "state_name": territories.STATE_CODE_TO_NAME.get(state_code, state_code),
+                "owner_username": str(row.get("owner_username") or "").split(", ")[0],
+                "markets": row.get("markets", []),
+                "prospect_count": int(row.get("prospect_count") or 0),
+                "conflicts": row.get("conflicts", []),
+            }
+        )
+    return rows
+
+
+def normalize_admin_username(value: Any) -> str:
+    username = str(value or "").strip().upper()
+    if not ADMIN_USERNAME_PATTERN.fullmatch(username):
+        raise ValueError("Username must be 2-32 chars: A-Z, 0-9, underscore, starting with a letter.")
+    return username
+
+
+def default_password_hash_env(username: str) -> str:
+    safe_username = re.sub(r"[^A-Z0-9_]+", "_", username.strip().upper()).strip("_")
+    return f"AUTH_{safe_username}_PASSWORD_HASH"
+
+
+def parse_admin_user_form(form: Any, *, existing_username: str | None = None) -> tuple[str, dict[str, Any]]:
+    username = normalize_admin_username(existing_username or form.get("username"))
+    display_name = str(form.get("display_name") or username).strip() or username
+    role = str(form.get("role") or "user").strip().lower()
+    if role not in {"admin", "user"}:
+        raise ValueError("Role must be admin or user.")
+
+    password_hash_env = str(form.get("password_hash_env") or "").strip().upper()
+    if not password_hash_env:
+        password_hash_env = default_password_hash_env(username)
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,80}", password_hash_env):
+        raise ValueError("Password hash env var must look like AUTH_USERNAME_PASSWORD_HASH.")
+
+    if role == "admin":
+        allowed_states = ["*"]
+    else:
+        allowed_states = [
+            state_code
+            for state_code in territories.normalize_state_list(form.get("allowed_states"))
+            if state_code != "*"
+        ]
+
+    return username, {
+        "role": role,
+        "display_name": display_name,
+        "allowed_states": allowed_states,
+        "password_hash_env": password_hash_env,
+    }
+
+
+def validate_admin_users_document(data: dict[str, Any]) -> dict[str, Any]:
+    users = data.get("users")
+    if not isinstance(users, dict):
+        raise ValueError("Users document must contain a users mapping.")
+    normalized = {"users": {}}
+    admin_count = 0
+    for raw_username, raw_user in users.items():
+        username = normalize_admin_username(raw_username)
+        if not isinstance(raw_user, dict):
+            raise ValueError(f"User {username} must be a mapping.")
+        role = str(raw_user.get("role") or "user").strip().lower()
+        if role not in {"admin", "user"}:
+            raise ValueError(f"User {username} has invalid role {role!r}.")
+        if role == "admin":
+            admin_count += 1
+            allowed_states = ["*"]
+        else:
+            allowed_states = [
+                state_code
+                for state_code in territories.normalize_state_list(raw_user.get("allowed_states"))
+                if state_code != "*"
+            ]
+        password_hash_env = str(raw_user.get("password_hash_env") or "").strip().upper()
+        if not password_hash_env:
+            password_hash_env = default_password_hash_env(username)
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,80}", password_hash_env):
+            raise ValueError(f"User {username} has invalid password hash env var.")
+        normalized["users"][username] = {
+            "role": role,
+            "display_name": str(raw_user.get("display_name") or username).strip() or username,
+            "allowed_states": allowed_states,
+            "password_hash_env": password_hash_env,
+        }
+    if admin_count < 1:
+        raise ValueError("At least one admin user is required.")
+    conflicts = territories.validate_exclusive_territories(normalized)
+    if conflicts:
+        states = ", ".join(str(conflict.get("state")) for conflict in conflicts)
+        raise ValueError(f"Territory conflict detected for: {states}")
+    return normalized
+
+
+def save_admin_users_document(data: dict[str, Any]) -> dict[str, Any]:
+    normalized = validate_admin_users_document(data)
+    write_users_document(normalized)
+    return normalized
+
+
+def owner_by_state_from_users(users_config: dict[str, Any]) -> dict[str, str]:
+    owners: dict[str, str] = {}
+    for username, user in users_config.get("users", {}).items():
+        if str(user.get("role") or "").strip().lower() == "admin":
+            continue
+        for state_code in territories.normalize_state_list(user.get("allowed_states")):
+            if state_code != "*":
+                owners[state_code] = str(username)
+    return owners
+
+
+def table_column_names(connection: sqlite3.Connection, table_name: str) -> set[str]:
+    try:
+        return {
+            str(row["name"])
+            for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+        }
+    except sqlite3.Error:
+        return set()
+
+
+def reconcile_owner_fields(
+    connection: sqlite3.Connection,
+    users_config: dict[str, Any],
+    *,
+    states: set[str] | None = None,
+) -> dict[str, int]:
+    owners_by_state = owner_by_state_from_users(users_config)
+    stats = {
+        "prospects": 0,
+        "quotes": 0,
+        "outreach_queue": 0,
+        "dashboard_jobs": 0,
+    }
+
+    pipeline_db.ensure_territory_columns(connection)
+
+    prospect_columns = table_column_names(connection, "prospects")
+    if {"id", "market", "market_state", "owner_username"}.issubset(prospect_columns):
+        rows = connection.execute(
+            "SELECT id, market, market_state, owner_username, state, state_guess FROM prospects"
+        ).fetchall()
+        for row in rows:
+            prospect = _row_to_dict(row)
+            state_code = prospect_state_from_record(prospect)
+            if not state_code or (states is not None and state_code not in states):
+                continue
+            owner_username = owners_by_state.get(state_code)
+            if (
+                territories.normalize_state(prospect.get("market_state")) != state_code
+                or str(prospect.get("owner_username") or "") != str(owner_username or "")
+            ):
+                connection.execute(
+                    """
+                    UPDATE prospects
+                    SET market_state = ?,
+                        owner_username = ?,
+                        updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (state_code, owner_username, utc_now(), prospect["id"]),
+                )
+                stats["prospects"] += 1
+
+    quote_columns = table_column_names(connection, "quotes")
+    if {"id", "prospect_id", "owner_username", "market_state"}.issubset(quote_columns):
+        rows = connection.execute(
+            """
+            SELECT q.id, q.owner_username, q.market_state,
+                   p.owner_username AS prospect_owner_username,
+                   p.market_state AS prospect_market_state
+            FROM quotes q
+            JOIN prospects p ON p.id = q.prospect_id
+            """
+        ).fetchall()
+        for row in rows:
+            state_code = territories.normalize_state(row["prospect_market_state"])
+            if states is not None and state_code not in states:
+                continue
+            if row["owner_username"] != row["prospect_owner_username"] or row["market_state"] != row["prospect_market_state"]:
+                connection.execute(
+                    """
+                    UPDATE quotes
+                    SET owner_username = ?,
+                        market_state = ?
+                    WHERE id = ?
+                    """,
+                    (row["prospect_owner_username"], row["prospect_market_state"], row["id"]),
+                )
+                stats["quotes"] += 1
+
+    queue_columns = table_column_names(connection, "outreach_queue")
+    if {"id", "prospect_id", "owner_username", "market_state"}.issubset(queue_columns):
+        rows = connection.execute(
+            """
+            SELECT q.id, q.owner_username, q.market_state,
+                   p.owner_username AS prospect_owner_username,
+                   p.market_state AS prospect_market_state
+            FROM outreach_queue q
+            JOIN prospects p ON p.id = q.prospect_id
+            """
+        ).fetchall()
+        for row in rows:
+            state_code = territories.normalize_state(row["prospect_market_state"])
+            if states is not None and state_code not in states:
+                continue
+            if row["owner_username"] != row["prospect_owner_username"] or row["market_state"] != row["prospect_market_state"]:
+                connection.execute(
+                    """
+                    UPDATE outreach_queue
+                    SET owner_username = ?,
+                        market_state = ?
+                    WHERE id = ?
+                    """,
+                    (row["prospect_owner_username"], row["prospect_market_state"], row["id"]),
+                )
+                stats["outreach_queue"] += 1
+
+    job_columns = table_column_names(connection, "dashboard_jobs")
+    if {"id", "market", "market_state"}.issubset(job_columns):
+        rows = connection.execute("SELECT id, market, market_state FROM dashboard_jobs").fetchall()
+        for row in rows:
+            state_code = configured_market_state(str(row["market"] or "").strip())
+            if not state_code or (states is not None and state_code not in states):
+                continue
+            if territories.normalize_state(row["market_state"]) != state_code:
+                connection.execute(
+                    "UPDATE dashboard_jobs SET market_state = ?, updated_at = ? WHERE id = ?",
+                    (state_code, utc_now(), row["id"]),
+                )
+                stats["dashboard_jobs"] += 1
+
+    return stats
+
+
+def admin_result_message() -> dict[str, str] | None:
+    message = str(request.args.get("message") or "").strip()
+    if not message:
+        return None
+    status = str(request.args.get("status") or "success").strip()
+    return {"status": "error" if status == "error" else "success", "message": message}
+
+
+def admin_redirect(message: str, *, status: str = "success") -> Any:
+    return redirect(url_for("admin_home", message=message, status=status))
 
 
 def admin_territory_diagnostics() -> dict[str, Any]:
@@ -1582,6 +1867,20 @@ def write_markets_document(data: dict[str, Any]) -> None:
         dump_yaml_text(data),
         encoding="utf-8",
     )
+
+
+def load_users_document() -> dict[str, Any]:
+    return auth_service.load_user_config(users_config_path())
+
+
+def write_users_document(data: dict[str, Any]) -> None:
+    path = users_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+        backup_path = path.with_name(f"{path.name}.bak.{timestamp}")
+        shutil.copy2(path, backup_path)
+    path.write_text(dump_yaml_text(data), encoding="utf-8")
 
 
 def market_message_from_query() -> dict[str, str] | None:
@@ -2277,13 +2576,120 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             abort(404)
         return send_file(resolved)
 
+    @app.get("/admin")
+    @login_required
+    @auth_service.admin_required
+    def admin_home() -> str:
+        diagnostics = admin_territory_diagnostics()
+        return render_template(
+            "dashboard/admin.html",
+            active_page="admin",
+            users=admin_user_config_rows(),
+            territory_rows=admin_state_assignment_rows(),
+            user_options=admin_non_admin_user_options(),
+            missing_state_markets=diagnostics["missing_state_markets"],
+            unknown_prospect_count=diagnostics["unknown_prospect_count"],
+            conflicts=diagnostics["conflicts"],
+            users_config_path=users_config_path(),
+            hash_generator_path=PROJECT_ROOT / "generate_user_password_hash.bat",
+            message=admin_result_message(),
+        )
+
+    @app.post("/admin/users/add")
+    @login_required
+    @auth_service.admin_required
+    def admin_add_user():
+        try:
+            username, user_details = parse_admin_user_form(request.form)
+            config = load_users_document()
+            if username in config.get("users", {}):
+                raise ValueError(f"User {username} already exists.")
+            config["users"][username] = user_details
+            normalized = save_admin_users_document(config)
+            connection = get_connection()
+            stats = reconcile_owner_fields(connection, normalized)
+            connection.commit()
+        except Exception as exc:
+            return admin_redirect(str(exc), status="error")
+        changed = sum(stats.values())
+        return admin_redirect(
+            f"User {username} added. Set {user_details['password_hash_env']} in Railway before login. Synced {changed} rows."
+        )
+
+    @app.post("/admin/users/<username>/update")
+    @login_required
+    @auth_service.admin_required
+    def admin_update_user(username: str):
+        try:
+            username = normalize_admin_username(username)
+            config = load_users_document()
+            if username not in config.get("users", {}):
+                abort(404)
+            _, user_details = parse_admin_user_form(request.form, existing_username=username)
+            config["users"][username] = user_details
+            normalized = save_admin_users_document(config)
+            connection = get_connection()
+            stats = reconcile_owner_fields(connection, normalized)
+            connection.commit()
+        except Exception as exc:
+            return admin_redirect(str(exc), status="error")
+        changed = sum(stats.values())
+        return admin_redirect(f"User {username} updated. Synced {changed} ownership rows.")
+
+    @app.post("/admin/territories/assign")
+    @login_required
+    @auth_service.admin_required
+    def admin_assign_territory():
+        try:
+            state_code = territories.normalize_state(request.form.get("state"))
+            if not state_code:
+                raise ValueError("Choose a valid state.")
+            owner_username_raw = str(request.form.get("owner_username") or "").strip()
+            owner_username = normalize_admin_username(owner_username_raw) if owner_username_raw else ""
+            config = load_users_document()
+            users = config.get("users", {})
+            if owner_username:
+                owner = users.get(owner_username)
+                if not owner:
+                    raise ValueError(f"User {owner_username} does not exist.")
+                if str(owner.get("role") or "").strip().lower() == "admin":
+                    raise ValueError("Admin already has all states; assign territories to non-admin users.")
+
+            for raw_user in users.values():
+                if not isinstance(raw_user, dict):
+                    continue
+                if str(raw_user.get("role") or "").strip().lower() == "admin":
+                    raw_user["allowed_states"] = ["*"]
+                    continue
+                raw_user["allowed_states"] = [
+                    state
+                    for state in territories.normalize_state_list(raw_user.get("allowed_states"))
+                    if state != "*" and state != state_code
+                ]
+            if owner_username:
+                owner_states = territories.normalize_state_list(users[owner_username].get("allowed_states"))
+                if state_code not in owner_states:
+                    owner_states.append(state_code)
+                users[owner_username]["allowed_states"] = owner_states
+
+            normalized = save_admin_users_document(config)
+            connection = get_connection()
+            stats = reconcile_owner_fields(connection, normalized, states={state_code})
+            connection.commit()
+        except Exception as exc:
+            return admin_redirect(str(exc), status="error")
+
+        changed = sum(stats.values())
+        owner_label = owner_username or "unassigned"
+        return admin_redirect(f"{state_code} assigned to {owner_label}. Synced {changed} ownership rows.")
+
     @app.get("/admin/database")
     @login_required
     @auth_service.admin_required
     def database_admin() -> str:
         return render_template(
             "dashboard/database_admin.html",
-            active_page="database",
+            active_page="admin",
             db_path=app.config["DATABASE_PATH"],
             import_enabled=app.config["DASHBOARD_DB_IMPORT_ENABLED"],
             result=None,
@@ -2299,7 +2705,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         if request.form.get("confirm_import") != "1":
             return render_template(
                 "dashboard/database_admin.html",
-                active_page="database",
+                active_page="admin",
                 db_path=app.config["DATABASE_PATH"],
                 import_enabled=True,
                 result=None,
@@ -2309,7 +2715,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         if uploaded_file is None or not getattr(uploaded_file, "filename", ""):
             return render_template(
                 "dashboard/database_admin.html",
-                active_page="database",
+                active_page="admin",
                 db_path=app.config["DATABASE_PATH"],
                 import_enabled=True,
                 result=None,
@@ -2320,7 +2726,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         except Exception as exc:
             return render_template(
                 "dashboard/database_admin.html",
-                active_page="database",
+                active_page="admin",
                 db_path=app.config["DATABASE_PATH"],
                 import_enabled=True,
                 result=None,
@@ -2328,7 +2734,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             )
         return render_template(
             "dashboard/database_admin.html",
-            active_page="database",
+            active_page="admin",
             db_path=app.config["DATABASE_PATH"],
             import_enabled=True,
             result=result,
@@ -2341,7 +2747,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     def media_admin() -> str:
         return render_template(
             "dashboard/media_admin.html",
-            active_page="media",
+            active_page="admin",
             import_enabled=app.config["DASHBOARD_MEDIA_IMPORT_ENABLED"],
             result=None,
             error="",
@@ -2356,7 +2762,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         if request.form.get("confirm_import") != "1":
             return render_template(
                 "dashboard/media_admin.html",
-                active_page="media",
+                active_page="admin",
                 import_enabled=True,
                 result=None,
                 error="Check the confirmation box before importing.",
@@ -2365,7 +2771,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         if uploaded_file is None or not getattr(uploaded_file, "filename", ""):
             return render_template(
                 "dashboard/media_admin.html",
-                active_page="media",
+                active_page="admin",
                 import_enabled=True,
                 result=None,
                 error="Choose a .zip file first.",
@@ -2375,14 +2781,14 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         except Exception as exc:
             return render_template(
                 "dashboard/media_admin.html",
-                active_page="media",
+                active_page="admin",
                 import_enabled=True,
                 result=None,
                 error=str(exc),
             )
         return render_template(
             "dashboard/media_admin.html",
-            active_page="media",
+            active_page="admin",
             import_enabled=True,
             result=result,
             error="",

@@ -24,7 +24,7 @@
       <a href="{{ url_for('outbound') }}" class="{% if active_page == 'outbound' %}active{% endif %}">Outbound</a>
       <a href="{{ url_for('send_page') }}" class="{% if active_page == 'send' %}active{% endif %}">Send</a>
       {% if dashboard_current_user and dashboard_current_user.role == 'admin' %}
-      <a href="{{ url_for('admin_users') }}" class="{% if active_page == 'admin' %}active{% endif %}">Admin</a>
+      <a href="{{ url_for('admin_home') }}" class="{% if active_page == 'admin' %}active{% endif %}">Admin</a>
       {% endif %}
       {% if dashboard_current_user %}
       <div class="nav-user" aria-label="Current user">

@@ -341,7 +341,9 @@ def _canonical_allowed_states(
 ) -> tuple[str, ...]:
     states = tuple(_iter_allowed_state_values(value))
     if not states:
-        raise ValueError(f"Auth user {username} must have allowed_states.")
+        if role == "admin":
+            raise ValueError(f"Admin auth user {username} must have allowed_states.")
+        return ()
 
     if role == "admin" and "*" in states:
         return ("*",)

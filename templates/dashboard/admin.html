@@ -1,0 +1,216 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}Admin - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <h1>Admin</h1>
+    <p>Users, territories, ownership sync, database import, and media import.</p>
+  </div>
+  <div class="link-list">
+    <a class="button" href="{{ url_for('admin_users') }}">Diagnostics</a>
+    <a class="button" href="{{ url_for('admin_territories') }}">Territories</a>
+    <a class="button" href="{{ url_for('database_admin') }}">Database</a>
+    <a class="button" href="{{ url_for('media_admin') }}">Media</a>
+  </div>
+</section>
+
+{% if message %}
+  <div class="notice {{ message.status }}">{{ message.message }}</div>
+{% endif %}
+
+{% if conflicts %}
+  <div class="notice error">
+    Territory conflict detected. Fix duplicate state ownership before relying on non-admin access.
+  </div>
+{% endif %}
+
+<section class="summary-grid admin-tool-grid">
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Add User</h2>
+    </div>
+    <form class="admin-form" method="post" action="{{ url_for('admin_add_user') }}">
+      <label>
+        <span>Username</span>
+        <input name="username" placeholder="NEWUSER" required>
+      </label>
+      <label>
+        <span>Display Name</span>
+        <input name="display_name" placeholder="Sales User">
+      </label>
+      <label>
+        <span>Role</span>
+        <select name="role">
+          <option value="user">User</option>
+          <option value="admin">Admin</option>
+        </select>
+      </label>
+      <label>
+        <span>Allowed States</span>
+        <input name="allowed_states" placeholder="OH, KY, TX">
+      </label>
+      <label>
+        <span>Password Hash Env</span>
+        <input name="password_hash_env" placeholder="AUTH_NEWUSER_PASSWORD_HASH">
+      </label>
+      <button class="button primary" type="submit">Add User</button>
+    </form>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Password Hashes</h2>
+    </div>
+    <div class="admin-command-box">
+      <span>Generator</span>
+      <code>{{ hash_generator_path }}</code>
+    </div>
+    <p class="muted">Run the generator, then put the printed hash value into the matching Railway variable.</p>
+  </div>
+</section>
+
+<section class="table-panel admin-diagnostics-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Users</h2>
+      <p>Changing roles or states rewrites config/users.yaml and syncs ownership columns.</p>
+    </div>
+  </div>
+  <div class="admin-user-card-grid">
+    {% for user in users %}
+      <form class="panel admin-user-card" method="post" action="{{ url_for('admin_update_user', username=user.username) }}">
+        <div class="panel-header">
+          <div>
+            <h3>{{ user.username }}</h3>
+            <p>{{ user.prospect_count }} prospects, {{ user.owned_market_count }} markets</p>
+          </div>
+          {% if user.password_hash_present %}
+            <span class="pill status-pass">Hash env set</span>
+          {% else %}
+            <span class="pill status-fail">Hash env missing</span>
+          {% endif %}
+        </div>
+        <div class="admin-form-grid">
+          <label>
+            <span>Display Name</span>
+            <input name="display_name" value="{{ user.display_name }}">
+          </label>
+          <label>
+            <span>Role</span>
+            <select name="role">
+              <option value="user" {% if user.role == 'user' %}selected{% endif %}>User</option>
+              <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>Admin</option>
+            </select>
+          </label>
+          <label>
+            <span>Allowed States</span>
+            <input name="allowed_states" value="{{ user.allowed_states_input }}" {% if user.role == 'admin' %}placeholder="ALL STATES"{% endif %}>
+          </label>
+          <label>
+            <span>Password Hash Env</span>
+            <input name="password_hash_env" value="{{ user.password_hash_env }}">
+          </label>
+        </div>
+        <div class="admin-card-stats">
+          <span><strong>{{ user.pending_review_count }}</strong> pending review</span>
+          <span><strong>{{ user.outreach_drafted_count }}</strong> drafted</span>
+          <span><strong>{{ user.outreach_sent_count }}</strong> sent</span>
+        </div>
+        <button class="button primary" type="submit">Save User</button>
+      </form>
+    {% else %}
+      <p class="empty">No users configured.</p>
+    {% endfor %}
+  </div>
+</section>
+
+<section class="table-panel admin-diagnostics-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Territory Assignment</h2>
+      <p>State moves update user permissions and synchronize lead, quote, queue, and job state ownership.</p>
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table class="compact-table admin-territories-table">
+      <thead>
+        <tr>
+          <th>State</th>
+          <th>Owner</th>
+          <th>Markets</th>
+          <th>Prospects</th>
+          <th>Assign</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for territory in territory_rows %}
+          <tr>
+            <td>
+              <strong>{{ territory.state }}</strong>
+              <small>{{ territory.state_name }}</small>
+            </td>
+            <td>{{ territory.owner_username or "Unassigned" }}</td>
+            <td>
+              <div class="stage-chip-list">
+                {% for market in territory.markets %}
+                  <span>{{ market.label }} <code>{{ market.key }}</code></span>
+                {% else %}
+                  <span class="empty">No configured markets</span>
+                {% endfor %}
+              </div>
+            </td>
+            <td>{{ territory.prospect_count }}</td>
+            <td>
+              <form class="inline-admin-form" method="post" action="{{ url_for('admin_assign_territory') }}">
+                <input type="hidden" name="state" value="{{ territory.state }}">
+                <select name="owner_username">
+                  <option value="">Unassigned</option>
+                  {% for user in user_options %}
+                    <option value="{{ user.username }}" {% if territory.owner_username == user.username %}selected{% endif %}>
+                      {{ user.username }} - {{ user.label }}
+                    </option>
+                  {% endfor %}
+                </select>
+                <button class="button primary" type="submit">Move</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="summary-grid">
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Missing Market State</h2>
+    </div>
+    <div class="scope-grid">
+      {% for market in missing_state_markets %}
+        <div>
+          <h3>{{ market.label }}</h3>
+          <p class="muted"><code>{{ market.key }}</code></p>
+        </div>
+      {% else %}
+        <p class="empty">No configured markets are missing state.</p>
+      {% endfor %}
+      {% if unknown_prospect_count %}
+        <div class="notice error">{{ unknown_prospect_count }} prospects have no recognizable state.</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Config</h2>
+    </div>
+    <div class="admin-command-box">
+      <span>Users YAML</span>
+      <code>{{ users_config_path }}</code>
+    </div>
+  </div>
+</section>
+{% endblock %}
