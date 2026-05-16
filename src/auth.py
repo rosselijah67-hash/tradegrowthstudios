@@ -47,8 +47,9 @@ AUTH_SESSION_USER_KEY = "user_id"
 USERNAME_SESSION_KEYS = (AUTH_SESSION_USER_KEY, "username")
 STATE_CODE_RE = re.compile(r"^[A-Z]{2}$")
 F = TypeVar("F", bound=Callable[..., Any])
-USER_PERMISSION_KEYS = ("quotes", "run_jobs", "outbound", "send")
+USER_PERMISSION_KEYS = ("markets", "quotes", "run_jobs", "outbound", "send")
 USER_PERMISSION_LABELS = {
+    "markets": "Markets",
     "quotes": "Quotes",
     "run_jobs": "Run / Jobs",
     "outbound": "Outbound",

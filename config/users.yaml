@@ -6,6 +6,7 @@ users:
     - '*'
     password_hash_env: AUTH_ADMIN_PASSWORD_HASH
     permissions:
+      markets: true
       quotes: true
       run_jobs: true
       outbound: true
@@ -18,6 +19,7 @@ users:
     - IL
     password_hash_env: AUTH_AG_PASSWORD_HASH
     permissions:
+      markets: true
       quotes: true
       run_jobs: true
       outbound: true
@@ -30,6 +32,7 @@ users:
     - MI
     password_hash_env: AUTH_JOSHGETSMONEY_PASSWORD_HASH
     permissions:
+      markets: true
       quotes: true
       run_jobs: true
       outbound: true
@@ -42,6 +45,7 @@ users:
     - TN
     password_hash_env: AUTH_JROSS_PASSWORD_HASH
     permissions:
+      markets: true
       quotes: true
       run_jobs: true
       outbound: true
@@ -55,6 +59,7 @@ users:
     - TX
     password_hash_env: AUTH_QWHITE_PASSWORD_HASH
     permissions:
+      markets: true
       quotes: true
       run_jobs: true
       outbound: true

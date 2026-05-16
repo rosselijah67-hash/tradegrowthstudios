@@ -3960,6 +3960,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         )
 
     @app.get("/markets")
+    @require_dashboard_permission("markets")
     def markets() -> str:
         return render_template(
             "dashboard/markets.html",
@@ -3969,6 +3970,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         )
 
     @app.post("/markets/add")
+    @require_dashboard_permission("markets")
     def add_market():
         try:
             market_key = add_market_from_form(request.form)

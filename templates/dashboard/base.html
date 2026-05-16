@@ -14,7 +14,9 @@
     </div>
     <nav class="nav-links" aria-label="Primary navigation">
       <a href="{{ url_for('overview') }}" class="{% if active_page == 'overview' %}active{% endif %}">Overview</a>
+      {% if dashboard_permissions.markets %}
       <a href="{{ url_for('markets') }}" class="{% if active_page == 'markets' %}active{% endif %}">Markets</a>
+      {% endif %}
       {% if dashboard_permissions.run_jobs %}
       <a href="{{ url_for('run_controls') }}" class="{% if active_page == 'run' %}active{% endif %}">Run</a>
       <a href="{{ url_for('jobs') }}" class="{% if active_page == 'jobs' %}active{% endif %}">Jobs</a>
