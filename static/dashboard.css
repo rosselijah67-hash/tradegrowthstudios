@@ -906,6 +906,12 @@ tbody tr:hover td {
   color: var(--danger);
 }
 
+.lead-category-pill {
+  margin-top: 6px;
+  background: #eef4ff;
+  color: #1d4ed8;
+}
+
 .muted {
   color: var(--muted);
 }

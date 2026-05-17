@@ -88,6 +88,9 @@
               <span>Qual: {{ lead.qualification_status or "n/a" }}</span>
               <span>Audit: {{ lead.audit_data_status or "n/a" }}</span>
               <span>Review: {{ lead.human_review_decision or lead.human_review_status or "n/a" }}</span>
+              {% if lead.lead_category_label %}
+                <span class="pill lead-category-pill">{{ lead.lead_category_label }}</span>
+              {% endif %}
               {% if lead.franchise_exclusion and lead.franchise_exclusion.is_excluded %}
                 <span class="pill {{ 'status-fail' if lead.franchise_exclusion.is_hard_exclude else 'status-warn' }}">
                   {{ "Hard" if lead.franchise_exclusion.is_hard_exclude else "Soft" }}

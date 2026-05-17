@@ -76,7 +76,12 @@
         {% for row in rows %}
           <tr>
             <td>{{ row.id }}</td>
-            <td class="business-cell">{{ row.business_name }}</td>
+            <td class="business-cell">
+              {{ row.business_name }}
+              {% if row.lead_category_label %}
+                <br><span class="pill lead-category-pill">{{ row.lead_category_label }}</span>
+              {% endif %}
+            </td>
             <td>{{ row.market or "" }}</td>
             <td>{{ row.niche or "" }}</td>
             <td>
@@ -106,7 +111,6 @@
             </td>
             <td><span class="pill">{{ row.pipeline_stage|pretty_label }}</span></td>
             <td class="table-actions">
-              <a class="table-action" href="{{ url_for('case_file', prospect_id=row.id) }}">Case</a>
               <form method="post" action="{{ url_for('restore_trash', prospect_id=row.id) }}">
     {{ csrf_input() }}
                 <input type="hidden" name="market" value="{{ market_filter.selected }}">

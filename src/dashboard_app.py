@@ -235,6 +235,7 @@ HIGH_TICKET_NICHE_KEYWORDS = {
 
 LEADS_COLUMNS = [
     "id",
+    "source",
     "business_name",
     "market",
     "niche",
@@ -1694,6 +1695,8 @@ def normalize_trash_category(value: Any) -> str:
 def _fallback_trash_reason(row: dict[str, Any]) -> str:
     status = _normalize_token(row.get("status"))
     qualification_status = _normalize_token(row.get("qualification_status"))
+    if prospect_has_missing_website_signal(row):
+        return "missing_website"
     if status == "CLOSED_LOST":
         return "closed_lost"
     if status == "INELIGIBLE" or qualification_status == "DISQUALIFIED":
@@ -1711,6 +1714,8 @@ def _trash_category_for_row(row: dict[str, Any], trash: dict[str, Any] | None = 
     reason = _normalize_token((trash or {}).get("reason")).lower()
     if status == "CLOSED_LOST" or reason == "closed_lost":
         return "closed_lost"
+    if prospect_has_missing_website_signal(row):
+        return "system_deleted"
     if reason in {"manual_review_reject", "crm_stage_discarded", "quick_deleted"}:
         return "manual_deleted"
     if status in {"REJECTED_REVIEW", "DISCARDED"}:
@@ -1849,23 +1854,28 @@ def restore_state_for_prospect(prospect: dict[str, Any], trash: dict[str, Any]) 
     previous_next_action = _normalize_token(trash.get("previous_next_action"))
     previous_review_status = _normalize_token(trash.get("previous_human_review_status"))
     previous_review_decision = _normalize_token(trash.get("previous_human_review_decision"))
-    if previous_status and previous_status not in TRASH_STATUSES:
-        return {
-            "status": previous_status,
-            "next_action": previous_next_action or CRM_NEXT_ACTIONS.get(previous_status),
-            "human_review_status": previous_review_status or prospect.get("human_review_status"),
-            "human_review_decision": previous_review_decision or prospect.get("human_review_decision"),
-        }
-    if _normalize_token(prospect.get("qualification_status")) == "NO_WEBSITE":
+    if prospect_has_missing_website_signal(prospect):
         return {
             "status": "NO_WEBSITE",
+            "qualification_status": "NO_WEBSITE",
             "next_action": "COLD_CALL_WEBSITE",
             "human_review_status": previous_review_status or prospect.get("human_review_status"),
             "human_review_decision": previous_review_decision or None,
         }
+
+    restored_qualification = restore_qualification_status_for_prospect(prospect)
+    if previous_status and previous_status not in TRASH_VISIBLE_STATUSES:
+        return {
+            "status": previous_status,
+            "qualification_status": restored_qualification,
+            "next_action": previous_next_action or CRM_NEXT_ACTIONS.get(previous_status),
+            "human_review_status": previous_review_status or prospect.get("human_review_status"),
+            "human_review_decision": previous_review_decision or prospect.get("human_review_decision"),
+        }
     if _normalize_token(prospect.get("audit_data_status")) == "READY":
         return {
             "status": "PENDING_REVIEW",
+            "qualification_status": restored_qualification,
             "next_action": "HUMAN_REVIEW",
             "human_review_status": "PENDING",
             "human_review_decision": None,
@@ -1873,16 +1883,56 @@ def restore_state_for_prospect(prospect: dict[str, Any], trash: dict[str, Any]) 
     if _normalize_token(prospect.get("qualification_status")) == "QUALIFIED":
         return {
             "status": "ELIGIBLE_FOR_AUDIT",
+            "qualification_status": "QUALIFIED",
             "next_action": "RUN_AUDIT",
             "human_review_status": prospect.get("human_review_status"),
             "human_review_decision": None,
         }
     return {
         "status": "NEW",
+        "qualification_status": restored_qualification,
         "next_action": None,
         "human_review_status": prospect.get("human_review_status"),
         "human_review_decision": None,
     }
+
+
+def restore_qualification_status_for_prospect(prospect: dict[str, Any]) -> str:
+    qualification_status = _normalize_token(prospect.get("qualification_status"))
+    if qualification_status in TRASH_QUALIFICATION_STATUSES:
+        return "DISCOVERED"
+    return qualification_status or "DISCOVERED"
+
+
+def prospect_has_missing_website_signal(
+    prospect: dict[str, Any] | sqlite3.Row,
+    metadata: dict[str, Any] | None = None,
+) -> bool:
+    metadata = metadata if metadata is not None else _metadata_dict(record_value(prospect, "metadata_json"))
+    status = _normalize_token(record_value(prospect, "status"))
+    qualification_status = _normalize_token(record_value(prospect, "qualification_status"))
+    next_action = _normalize_token(record_value(prospect, "next_action"))
+    disqualification_reason = _normalize_token(metadata.get("disqualification_reason"))
+    trash = metadata.get("trash") if isinstance(metadata.get("trash"), dict) else {}
+    trash_reason = _normalize_token(trash.get("reason"))
+    return (
+        status == "NO_WEBSITE"
+        or qualification_status == "NO_WEBSITE"
+        or next_action == "COLD_CALL_WEBSITE"
+        or metadata.get("no_website_bucket") is True
+        or disqualification_reason == "MISSING_WEBSITE"
+        or trash_reason == "MISSING_WEBSITE"
+    )
+
+
+def lead_category_label(
+    prospect: dict[str, Any] | sqlite3.Row,
+    metadata: dict[str, Any] | None = None,
+) -> str:
+    source = str(record_value(prospect, "source") or "").strip().lower()
+    if prospect_has_missing_website_signal(prospect, metadata):
+        return "Google Maps No Website" if source == "google_places" else "No Website Lead"
+    return "Google Maps Lead" if source == "google_places" else ""
 
 
 def restore_trashed_prospect(connection: sqlite3.Connection, prospect: dict[str, Any]) -> None:
@@ -1898,6 +1948,7 @@ def restore_trashed_prospect(connection: sqlite3.Connection, prospect: dict[str,
         """
         UPDATE prospects
         SET status = ?,
+            qualification_status = ?,
             next_action = ?,
             human_review_status = ?,
             human_review_decision = ?,
@@ -1907,6 +1958,7 @@ def restore_trashed_prospect(connection: sqlite3.Connection, prospect: dict[str,
         """,
         (
             restored_state["status"],
+            restored_state["qualification_status"],
             restored_state["next_action"],
             restored_state["human_review_status"],
             restored_state["human_review_decision"],
@@ -5641,6 +5693,7 @@ def load_leads(filters: dict[str, Any]) -> list[dict[str, Any]]:
         row["metadata"] = parse_json_field(row.get("metadata_json"))
         metadata = row["metadata"] if isinstance(row["metadata"], dict) else {}
         row["franchise_exclusion"] = metadata.get("franchise_exclusion") or {}
+        row["lead_category_label"] = lead_category_label(row, metadata)
 
     if selected_stage:
         rows = [row for row in rows if row["pipeline_stage"] == selected_stage]
@@ -5651,6 +5704,8 @@ def load_leads(filters: dict[str, Any]) -> list[dict[str, Any]]:
 def _enrich_trash_row(row: dict[str, Any]) -> dict[str, Any]:
     row["pipeline_stage"] = compute_pipeline_stage(row)
     metadata = _metadata_dict(row.get("metadata_json"))
+    if prospect_has_missing_website_signal(row, metadata):
+        row["pipeline_stage"] = "NO_WEBSITE"
     trash = metadata.get("trash") if isinstance(metadata.get("trash"), dict) else {}
     if not trash:
         reason = _fallback_trash_reason(row)
@@ -5668,6 +5723,7 @@ def _enrich_trash_row(row: dict[str, Any]) -> dict[str, Any]:
             else None
         )
     row["metadata"] = metadata
+    row["lead_category_label"] = lead_category_label(row, metadata)
     row["trash"] = trash
     row["trash_reason"] = trash.get("reason") or "rejected_or_discarded"
     stored_category = normalize_trash_category(trash.get("category"))
