@@ -102,8 +102,7 @@
         <p>Pulls one configured niche for the selected market.</p>
       </div>
     </div>
-    <p class="warning-text">Preview only â€” calls Google Places API, does not write to database.</p>
-    <p class="form-help">Unlike local dry-runs, this still uses Google API quota.</p>
+    <p class="warning-text">Calls Google Places API and writes new or updated prospects to SQLite.</p>
     <label>
       <span>Niche</span>
       <select name="niche" required>
@@ -116,10 +115,6 @@
     <label>
       <span>Limit</span>
       <input type="number" name="limit_count" min="1" max="{{ places_limit_max }}" value="{{ places_limit_default }}">
-    </label>
-    <label class="check-row">
-      <input type="checkbox" name="dry_run" value="1" checked>
-      <span>Preview only â€” calls Google Places API, does not write to database</span>
     </label>
     <label class="check-row">
       <input type="checkbox" name="confirm_run" value="1">
@@ -179,8 +174,8 @@
         <option value="fast" {% if selected_audit_mode == "fast" %}selected{% endif %}>Fast Audit</option>
       </select>
     </label>
-    <p class="form-help">Fast Audit is for batch triage. Deep Audit is slower and better for high-priority cases.</p>
-    <p class="form-help">Fast Audit captures screenshots and runs a lightweight crawl; PageSpeed is skipped by default.</p>
+    <p class="form-help">Fast Audit: up to 2 pages, shorter timeouts, screenshots, skips PageSpeed.</p>
+    <p class="form-help">Deep Audit: up to 5 pages, screenshots, and PageSpeed checks.</p>
     <label>
       <span>Limit</span>
       <input type="number" name="limit_count" min="1" max="{{ audit_limit_max }}" value="{{ audit_limit_default }}">
@@ -303,8 +298,6 @@
     </div>
   </div>
   <p class="warning-text">Includes external API and website calls. Steps run sequentially and stop on the first failure.</p>
-  <p class="warning-text">For Places steps: Preview only â€” calls Google Places API, does not write to database.</p>
-  <p class="form-help">Unlike local dry-runs, this still uses Google API quota.</p>
   <form class="full-pipeline-form" method="post" action="{{ url_for('start_full_market_pipeline') }}">
     {{ csrf_input() }}
     <input type="hidden" name="market" value="{{ market_filter.selected }}">
@@ -343,13 +336,9 @@
         <option value="fast" {% if selected_audit_mode == "fast" %}selected{% endif %}>Fast Audit</option>
       </select>
     </label>
-    <p class="form-help">Fast Audit is for batch triage. Deep Audit is slower and better for high-priority cases.</p>
-    <p class="form-help">Fast Audit captures screenshots and runs a lightweight crawl; PageSpeed is skipped by default.</p>
+    <p class="form-help">Fast Audit: up to 2 pages, shorter timeouts, screenshots, skips PageSpeed.</p>
+    <p class="form-help">Deep Audit: up to 5 pages, screenshots, and PageSpeed checks.</p>
 
-    <label class="check-row">
-      <input type="checkbox" name="dry_run_all" value="1" checked>
-      <span>Preview supported steps; Places still calls Google API without writing prospects</span>
-    </label>
     <label class="check-row">
       <input type="checkbox" name="confirm_run" value="1">
       <span>Confirm full live pipeline</span>

@@ -11378,6 +11378,8 @@ def start_job_from_form(form: Any) -> str:
         raise ValueError(f"Audit jobs are limited to {AUDIT_JOB_LIMIT} rows.")
 
     dry_run = form.get("dry_run") == "1"
+    if job_type == "places_pull":
+        dry_run = False
     confirmed = form.get("confirm_run") == "1"
     if is_external and not dry_run and not confirmed:
         raise ValueError("Confirm the run before starting a non-dry-run external job.")
@@ -11452,8 +11454,8 @@ def start_full_pipeline_from_form(form: Any) -> str:
     if audit_limit > AUDIT_JOB_LIMIT:
         raise ValueError(f"Audit jobs are limited to {AUDIT_JOB_LIMIT} rows.")
 
-    dry_run_all = form.get("dry_run_all") == "1"
-    if not dry_run_all and form.get("confirm_run") != "1":
+    dry_run_all = False
+    if form.get("confirm_run") != "1":
         raise ValueError("Confirm the full pipeline before starting live external calls.")
     audit_mode = str(form.get("audit_mode") or "deep").strip().lower()
     if audit_mode not in {"deep", "fast"}:

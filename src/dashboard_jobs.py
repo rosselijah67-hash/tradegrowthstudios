@@ -232,7 +232,7 @@ def create_full_pipeline_job(
     per_niche_places_limit: int,
     audit_limit: int,
     artifact_limit: int,
-    dry_run_all: bool = True,
+    dry_run_all: bool = False,
     audit_fast: bool = False,
     metadata: dict[str, Any] | None = None,
     requested_by_user: str | None = None,
