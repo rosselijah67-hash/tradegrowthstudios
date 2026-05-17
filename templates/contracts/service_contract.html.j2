@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ contract.title or "Service Agreement" }}</title>
+  <style>
+    :root {
+      color: #1f2933;
+      background: #f5f7fa;
+      font-family: Arial, Helvetica, sans-serif;
+      line-height: 1.5;
+    }
+    body {
+      margin: 0;
+      padding: 32px;
+      background: #f5f7fa;
+    }
+    main {
+      max-width: 900px;
+      margin: 0 auto;
+      background: #ffffff;
+      border: 1px solid #d8dee8;
+      border-radius: 6px;
+      padding: 40px;
+    }
+    h1, h2, h3 {
+      color: #13202f;
+      line-height: 1.2;
+      margin: 0 0 12px;
+    }
+    h1 {
+      font-size: 28px;
+      margin-bottom: 6px;
+    }
+    h2 {
+      font-size: 18px;
+      margin-top: 28px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid #e4e8ef;
+    }
+    p {
+      margin: 0 0 12px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 12px 0 18px;
+    }
+    th, td {
+      border: 1px solid #d8dee8;
+      padding: 9px 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #f1f4f8;
+      color: #243447;
+      font-weight: 700;
+    }
+    ul {
+      margin: 8px 0 16px 22px;
+      padding: 0;
+    }
+    li {
+      margin-bottom: 6px;
+    }
+    .muted {
+      color: #637083;
+    }
+    .notice {
+      border: 1px solid #d6a84f;
+      background: #fff8e6;
+      color: #493600;
+      padding: 12px 14px;
+      border-radius: 4px;
+      margin-bottom: 20px;
+    }
+    .parties {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+      margin-top: 18px;
+    }
+    .party {
+      border: 1px solid #e0e5ec;
+      border-radius: 4px;
+      padding: 14px;
+    }
+    .total-row td {
+      font-weight: 700;
+      background: #f8fafc;
+    }
+    .signature-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 18px;
+      margin-top: 18px;
+    }
+    .signature-block {
+      border: 1px solid #d8dee8;
+      border-radius: 4px;
+      padding: 16px;
+      min-height: 150px;
+    }
+    .signature-line {
+      border-bottom: 1px solid #1f2933;
+      height: 36px;
+      margin: 18px 0 8px;
+    }
+    .anchor {
+      color: #ffffff;
+      font-size: 1px;
+      line-height: 1px;
+    }
+    .hidden-anchors {
+      color: #ffffff;
+      font-size: 1px;
+      line-height: 1px;
+      height: 1px;
+      overflow: hidden;
+    }
+    @media print {
+      body {
+        background: #ffffff;
+        padding: 0;
+      }
+      main {
+        border: 0;
+        border-radius: 0;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    {% if docx_template_warning %}
+      <div class="notice">{{ docx_template_warning }}</div>
+    {% endif %}
+
+    <h1>{{ contract.title or "Service Agreement" }}</h1>
+    <p class="muted">Contract {{ contract.contract_key }}{% if contract.version %} - Version {{ contract.version }}{% endif %}</p>
+
+    <section class="parties" aria-label="Agreement parties">
+      <div class="party">
+        <h2>Service Provider</h2>
+        <p><strong>{{ provider.name }}</strong></p>
+      </div>
+      <div class="party">
+        <h2>Client</h2>
+        <p><strong>{{ business.legal_name or business.display_name or "Legal business name to be confirmed" }}</strong></p>
+        {% if business.entity_type %}<p>{{ business.entity_type }}</p>{% endif %}
+        {% if business.website_url %}<p>{{ business.website_url }}</p>{% endif %}
+        {% if business.address_line %}
+          <p>{{ business.address_line }}{% if business.city or business.state or business.postal_code %}<br>{{ business.city }}{% if business.city and business.state %}, {% endif %}{{ business.state }} {{ business.postal_code }}{% endif %}</p>
+        {% endif %}
+      </div>
+    </section>
+
+    <h2>Authorized Client Signer</h2>
+    <p>
+      {{ signer_primary.name or "Signer legal name to be confirmed" }}
+      {% if signer_primary.title %}, {{ signer_primary.title }}{% endif %}
+    </p>
+    {% if signer_primary.email %}<p class="muted">{{ signer_primary.email }}</p>{% endif %}
+
+    <h2>Agreement Dates</h2>
+    <table>
+      <tbody>
+        <tr>
+          <th>Effective date</th>
+          <td>{{ contract.effective_date or "To be confirmed" }}</td>
+        </tr>
+        <tr>
+          <th>Project start date</th>
+          <td>{{ contract.start_date or "To be confirmed" }}</td>
+        </tr>
+        <tr>
+          <th>Term</th>
+          <td>{% if quote.term_months %}{{ quote.term_months }} months{% else %}To be confirmed{% endif %}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Selected Scope</h2>
+    <p><strong>{{ quote.package_name or "Custom scope" }}</strong></p>
+    {% if scope.included_items %}
+      <table>
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Description</th>
+            <th>Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in scope.included_items %}
+            <tr>
+              <td>{{ item.name }}</td>
+              <td>{{ item.description or "" }}</td>
+              <td>{{ item.line_total }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <p>Scope to be confirmed.</p>
+    {% endif %}
+
+    {% if scope.recurring_items %}
+      <h3>Recurring Services</h3>
+      <table>
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th>Description</th>
+            <th>Monthly amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in scope.recurring_items %}
+            <tr>
+              <td>{{ item.name }}</td>
+              <td>{{ item.description or "" }}</td>
+              <td>{{ item.line_total }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% endif %}
+
+    <h2>Payment Terms</h2>
+    <table>
+      <tbody>
+        <tr>
+          <th>One-time project total</th>
+          <td>{{ quote.one_time_total }}</td>
+        </tr>
+        <tr>
+          <th>Recurring monthly total</th>
+          <td>{{ quote.recurring_monthly_total }}</td>
+        </tr>
+        <tr>
+          <th>Deposit due</th>
+          <td>{{ quote.deposit_due }}</td>
+        </tr>
+        <tr class="total-row">
+          <td>Balance due</td>
+          <td>{{ quote.balance_due }}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h2>Assumptions</h2>
+    {% if scope.assumptions %}
+      <ul>
+        {% for assumption in scope.assumptions %}
+          <li>{{ assumption }}</li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>Project assumptions to be confirmed before signature.</p>
+    {% endif %}
+
+    {% if scope.client_visible_notes %}
+      <h2>Project Notes</h2>
+      <p>{{ scope.client_visible_notes }}</p>
+    {% endif %}
+
+    {% if contract.additional_sections %}
+      {% for section in contract.additional_sections %}
+        <h2>{{ section.title or "Additional Section" }}</h2>
+        <p>{{ section.body }}</p>
+      {% endfor %}
+    {% endif %}
+
+    <h2>Signatures</h2>
+    <div class="signature-grid">
+      <div class="signature-block">
+        <p><strong>{{ provider.name }}</strong></p>
+        <div class="signature-line"><span class="anchor">{{ provider.signature_anchor }}</span></div>
+        <p>Signature</p>
+        <div class="signature-line"><span class="anchor">{{ provider.date_anchor }}</span></div>
+        <p>Date</p>
+      </div>
+
+      {% for block in signature_blocks %}
+        <div class="signature-block">
+          <p><strong>{{ block.name }}</strong>{% if block.title %}<br>{{ block.title }}{% endif %}</p>
+          <div class="signature-line"><span class="anchor">{{ block.signature_anchor }}</span></div>
+          <p>Signature</p>
+          <div class="signature-line"><span class="anchor">{{ block.date_anchor }}</span></div>
+          <p>Date</p>
+        </div>
+      {% endfor %}
+    </div>
+
+    {% if hidden_anchor_strings %}
+      <div class="hidden-anchors" aria-hidden="true">
+        {% for anchor in hidden_anchor_strings %}{{ anchor }} {% endfor %}
+      </div>
+    {% endif %}
+  </main>
+</body>
+</html>

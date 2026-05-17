@@ -22,8 +22,8 @@ users:
       markets: true
       quotes: true
       run_jobs: true
-      outbound: true
-      send: true
+      outbound: false
+      send: false
   JOSHGETSMONEY:
     role: user
     display_name: Joshua
@@ -35,8 +35,8 @@ users:
       markets: true
       quotes: true
       run_jobs: true
-      outbound: true
-      send: true
+      outbound: false
+      send: false
   JROSS:
     role: user
     display_name: Josiah
@@ -48,8 +48,8 @@ users:
       markets: true
       quotes: true
       run_jobs: true
-      outbound: true
-      send: true
+      outbound: false
+      send: false
   QWHITE:
     role: user
     display_name: Quinten
@@ -62,5 +62,5 @@ users:
       markets: true
       quotes: true
       run_jobs: true
-      outbound: true
-      send: true
+      outbound: false
+      send: false

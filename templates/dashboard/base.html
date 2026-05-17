@@ -27,6 +27,7 @@
       <a href="{{ url_for('tasks_board') }}" class="{% if active_page == 'tasks' %}active{% endif %}">Tasks</a>
       {% if dashboard_permissions.quotes %}
       <a href="{{ url_for('quotes_list') }}" class="{% if active_page == 'quotes' %}active{% endif %}">Quotes</a>
+      <a href="{{ url_for('contracts_list') }}" class="{% if active_page == 'contracts' %}active{% endif %}">Contracts</a>
       {% endif %}
       {% if dashboard_permissions.outbound %}
       <a href="{{ url_for('outbound') }}" class="{% if active_page == 'outbound' %}active{% endif %}">Outbound</a>

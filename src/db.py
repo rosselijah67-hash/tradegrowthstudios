@@ -335,6 +335,122 @@ CREATE INDEX IF NOT EXISTS idx_quote_events_created
 """
 
 
+CONTRACT_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS contracts (
+    id INTEGER PRIMARY KEY,
+    contract_key TEXT UNIQUE NOT NULL,
+    prospect_id INTEGER NOT NULL,
+    quote_id INTEGER,
+    owner_username TEXT,
+    market_state TEXT,
+    status TEXT NOT NULL DEFAULT 'draft'
+        CHECK (
+            status IN (
+                'draft',
+                'generated',
+                'sent',
+                'delivered',
+                'completed',
+                'declined',
+                'voided',
+                'error',
+                'superseded'
+            )
+        ),
+    title TEXT,
+    template_key TEXT,
+    version INTEGER DEFAULT 1,
+    legal_business_name TEXT,
+    business_entity_type TEXT,
+    billing_address TEXT,
+    signer_name TEXT,
+    signer_title TEXT,
+    signer_email TEXT,
+    signer_phone TEXT,
+    client_business_name TEXT,
+    client_contact_name TEXT,
+    client_email TEXT,
+    client_phone TEXT,
+    website_url TEXT,
+    effective_date TEXT,
+    start_date TEXT,
+    term_months INTEGER,
+    one_time_total_cents INTEGER DEFAULT 0,
+    recurring_monthly_total_cents INTEGER DEFAULT 0,
+    deposit_due_cents INTEGER DEFAULT 0,
+    balance_due_cents INTEGER DEFAULT 0,
+    variables_json TEXT DEFAULT '{}',
+    sections_json TEXT DEFAULT '[]',
+    signers_json TEXT DEFAULT '[]',
+    generated_docx_path TEXT,
+    generated_html_path TEXT,
+    generated_pdf_path TEXT,
+    docusign_envelope_id TEXT,
+    docusign_status TEXT,
+    docusign_status_updated_at TEXT,
+    sent_at TEXT,
+    completed_at TEXT,
+    declined_at TEXT,
+    voided_at TEXT,
+    supersedes_contract_id INTEGER,
+    metadata_json TEXT DEFAULT '{}',
+    created_at TEXT,
+    updated_at TEXT,
+    FOREIGN KEY (prospect_id) REFERENCES prospects(id) ON DELETE CASCADE,
+    FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL,
+    FOREIGN KEY (supersedes_contract_id) REFERENCES contracts(id) ON DELETE SET NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_contracts_contract_key
+    ON contracts(contract_key);
+
+CREATE INDEX IF NOT EXISTS idx_contracts_prospect
+    ON contracts(prospect_id);
+
+CREATE INDEX IF NOT EXISTS idx_contracts_quote
+    ON contracts(quote_id);
+
+CREATE INDEX IF NOT EXISTS idx_contracts_status
+    ON contracts(status);
+
+CREATE INDEX IF NOT EXISTS idx_contracts_owner_username
+    ON contracts(owner_username);
+
+CREATE INDEX IF NOT EXISTS idx_contracts_market_state
+    ON contracts(market_state);
+
+CREATE INDEX IF NOT EXISTS idx_contracts_docusign_envelope_id
+    ON contracts(docusign_envelope_id);
+
+CREATE TABLE IF NOT EXISTS contract_events (
+    id INTEGER PRIMARY KEY,
+    contract_id INTEGER,
+    prospect_id INTEGER,
+    quote_id INTEGER,
+    event_type TEXT,
+    status TEXT,
+    note TEXT,
+    metadata_json TEXT,
+    created_at TEXT,
+    FOREIGN KEY (contract_id) REFERENCES contracts(id) ON DELETE SET NULL,
+    FOREIGN KEY (prospect_id) REFERENCES prospects(id) ON DELETE CASCADE,
+    FOREIGN KEY (quote_id) REFERENCES quotes(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_contract_events_contract
+    ON contract_events(contract_id);
+
+CREATE INDEX IF NOT EXISTS idx_contract_events_prospect
+    ON contract_events(prospect_id);
+
+CREATE INDEX IF NOT EXISTS idx_contract_events_quote
+    ON contract_events(quote_id);
+
+CREATE INDEX IF NOT EXISTS idx_contract_events_created
+    ON contract_events(created_at);
+"""
+
+
 CRM_TASK_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS crm_tasks (
     id INTEGER PRIMARY KEY,
@@ -502,6 +618,67 @@ CRM_TASK_COLUMN_MIGRATIONS = {
 }
 
 
+CONTRACT_COLUMN_MIGRATIONS = {
+    "contract_key": "TEXT",
+    "prospect_id": "INTEGER",
+    "quote_id": "INTEGER",
+    "owner_username": "TEXT",
+    "market_state": "TEXT",
+    "status": "TEXT NOT NULL DEFAULT 'draft'",
+    "title": "TEXT",
+    "template_key": "TEXT",
+    "version": "INTEGER DEFAULT 1",
+    "legal_business_name": "TEXT",
+    "business_entity_type": "TEXT",
+    "billing_address": "TEXT",
+    "signer_name": "TEXT",
+    "signer_title": "TEXT",
+    "signer_email": "TEXT",
+    "signer_phone": "TEXT",
+    "client_business_name": "TEXT",
+    "client_contact_name": "TEXT",
+    "client_email": "TEXT",
+    "client_phone": "TEXT",
+    "website_url": "TEXT",
+    "effective_date": "TEXT",
+    "start_date": "TEXT",
+    "term_months": "INTEGER",
+    "one_time_total_cents": "INTEGER DEFAULT 0",
+    "recurring_monthly_total_cents": "INTEGER DEFAULT 0",
+    "deposit_due_cents": "INTEGER DEFAULT 0",
+    "balance_due_cents": "INTEGER DEFAULT 0",
+    "variables_json": "TEXT DEFAULT '{}'",
+    "sections_json": "TEXT DEFAULT '[]'",
+    "signers_json": "TEXT DEFAULT '[]'",
+    "generated_docx_path": "TEXT",
+    "generated_html_path": "TEXT",
+    "generated_pdf_path": "TEXT",
+    "docusign_envelope_id": "TEXT",
+    "docusign_status": "TEXT",
+    "docusign_status_updated_at": "TEXT",
+    "sent_at": "TEXT",
+    "completed_at": "TEXT",
+    "declined_at": "TEXT",
+    "voided_at": "TEXT",
+    "supersedes_contract_id": "INTEGER",
+    "metadata_json": "TEXT DEFAULT '{}'",
+    "created_at": "TEXT",
+    "updated_at": "TEXT",
+}
+
+
+CONTRACT_EVENT_COLUMN_MIGRATIONS = {
+    "contract_id": "INTEGER",
+    "prospect_id": "INTEGER",
+    "quote_id": "INTEGER",
+    "event_type": "TEXT",
+    "status": "TEXT",
+    "note": "TEXT",
+    "metadata_json": "TEXT",
+    "created_at": "TEXT",
+}
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
 
@@ -550,6 +727,7 @@ def init_db(db_path: str | Path | None = None) -> sqlite3.Connection:
     ensure_prospect_place_columns(connection)
     ensure_artifact_columns(connection)
     ensure_quote_schema(connection)
+    ensure_contract_schema(connection)
     ensure_task_schema(connection)
     ensure_territory_columns(connection)
     connection.commit()
@@ -571,6 +749,58 @@ def ensure_quote_schema_for_path(db_path: str | Path | None = None) -> None:
     connection = connect(db_path)
     try:
         ensure_quote_schema(connection)
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def ensure_contract_schema(connection: sqlite3.Connection) -> None:
+    """Create CRM contract tables and indexes without calling DocuSign."""
+
+    connection.executescript(CONTRACT_SCHEMA_SQL)
+    ensure_table_columns(connection, "contracts", CONTRACT_COLUMN_MIGRATIONS)
+    ensure_table_columns(connection, "contract_events", CONTRACT_EVENT_COLUMN_MIGRATIONS)
+    connection.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_contracts_contract_key "
+        "ON contracts(contract_key)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_contracts_prospect ON contracts(prospect_id)"
+    )
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_contracts_quote ON contracts(quote_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_contracts_status ON contracts(status)")
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_contracts_owner_username "
+        "ON contracts(owner_username)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_contracts_market_state ON contracts(market_state)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_contracts_docusign_envelope_id "
+        "ON contracts(docusign_envelope_id)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_contract_events_contract "
+        "ON contract_events(contract_id)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_contract_events_prospect "
+        "ON contract_events(prospect_id)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_contract_events_quote ON contract_events(quote_id)"
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_contract_events_created "
+        "ON contract_events(created_at)"
+    )
+
+
+def ensure_contract_schema_for_path(db_path: str | Path | None = None) -> None:
+    connection = connect(db_path)
+    try:
+        ensure_contract_schema(connection)
         connection.commit()
     finally:
         connection.close()
@@ -1071,6 +1301,8 @@ def main() -> int:
             "quotes",
             "quote_line_items",
             "quote_events",
+            "contracts",
+            "contract_events",
             "crm_tasks",
         ],
     )

@@ -17,6 +17,9 @@
 {% if quote_message %}
 <div class="notice {{ quote_message.status }}">{{ quote_message.message }}</div>
 {% endif %}
+{% if contract_message %}
+<div class="notice {{ contract_message.status }}">{{ contract_message.message }}</div>
+{% endif %}
 
 <section class="case-header">
   <div>
@@ -104,6 +107,74 @@
       <p>No quotes attached yet.</p>
     </div>
     <a class="button primary" href="{{ url_for('new_quote', prospect_id=prospect.id) }}">Create Quote</a>
+  </div>
+</section>
+{% endif %}
+{% endif %}
+
+{% if dashboard_permissions.quotes %}
+{% if latest_contract %}
+<section class="panel contract-summary-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Latest Contract</h2>
+      <p>{{ latest_contract.title or latest_contract.contract_key }}{% if contracts|length > 1 %} / {{ contracts|length }} contracts{% endif %}</p>
+    </div>
+    <span class="pill">{{ latest_contract.status|pretty_label }}</span>
+  </div>
+  <div class="contract-summary-grid">
+    <div>
+      <span>Status</span>
+      <strong>{{ latest_contract.status|pretty_label }}</strong>
+    </div>
+    <div>
+      <span>Quote</span>
+      <strong>
+        {% if latest_contract.quote_id %}
+        <a href="{{ url_for('quote_detail', quote_id=latest_contract.quote_id) }}">{{ latest_contract.quote_key or ("Quote " ~ latest_contract.quote_id) }}</a>
+        {% else %}
+        No linked quote
+        {% endif %}
+      </strong>
+    </div>
+    <div>
+      <span>Signer</span>
+      <strong>{{ latest_contract.signer_name or "To confirm" }}</strong>
+    </div>
+    <div>
+      <span>Generated</span>
+      <strong>{{ "Ready" if latest_contract.generated_files.generated_html_path.exists or latest_contract.generated_files.generated_docx_path.exists else "Not generated" }}</strong>
+    </div>
+    <div>
+      <span>DocuSign</span>
+      <strong>{{ latest_contract.docusign_status or "Not sent" }}</strong>
+    </div>
+    <div>
+      <span>Updated</span>
+      <strong>{{ latest_contract.updated_at or "" }}</strong>
+    </div>
+  </div>
+  <div class="quote-link-row">
+    <a class="button" href="{{ url_for('contract_detail', contract_id=latest_contract.id) }}">View Contract</a>
+    <a class="button" href="{{ url_for('edit_contract', contract_id=latest_contract.id) }}">Edit</a>
+    <form method="post" action="{{ url_for('generate_contract', contract_id=latest_contract.id) }}">
+      {{ csrf_input() }}
+      <button class="button" type="submit">Generate</button>
+    </form>
+    <a class="button" href="{{ url_for('contract_preview', contract_id=latest_contract.id) }}" target="_blank" rel="noopener noreferrer">Preview</a>
+    {% if latest_quote %}
+    <a class="button primary" href="{{ url_for('new_contract_from_quote', quote_id=latest_quote.id) }}">New Contract</a>
+    {% endif %}
+  </div>
+</section>
+{% elif latest_quote %}
+<section class="panel contract-summary-panel">
+  <div class="panel-header">
+    <div>
+      <h2>Contracts</h2>
+      <p>No contract attached yet.</p>
+    </div>
+    <a class="button primary" href="{{ url_for('new_contract_from_quote', quote_id=latest_quote.id) }}">Create Contract</a>
   </div>
 </section>
 {% endif %}

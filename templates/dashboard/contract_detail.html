@@ -1,0 +1,373 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}{{ contract.title or "Contract" }} - Local Lead Dashboard{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <a class="back-link" href="{{ url_for('case_file', prospect_id=contract.prospect_id) }}">Back to case</a>
+    <h1>{{ contract.title or "Service Agreement" }}</h1>
+    <p>{{ contract.contract_key }} / version {{ contract.version or 1 }}</p>
+  </div>
+  <div class="quote-link-row">
+    <a class="button primary" href="{{ url_for('edit_contract', contract_id=contract.id) }}">Edit</a>
+    <form method="post" action="{{ url_for('generate_contract', contract_id=contract.id) }}">
+      {{ csrf_input() }}
+      <button class="button" type="submit">Generate Contract</button>
+    </form>
+    <a class="button" href="{{ url_for('contract_preview', contract_id=contract.id) }}" target="_blank" rel="noopener noreferrer">Preview</a>
+    {% if contract.generated_files.generated_docx_path.exists %}
+    <a class="button" href="{{ url_for('download_contract_docx', contract_id=contract.id) }}">Download DOCX</a>
+    {% endif %}
+    {% if contract.generated_files.generated_html_path.exists %}
+    <a class="button" href="{{ url_for('download_contract_html', contract_id=contract.id) }}">Download HTML</a>
+    {% endif %}
+    <a class="button" href="#docusign-panel">DocuSign</a>
+  </div>
+</section>
+
+{% if message %}
+<div class="notice {{ message.status }}">{{ message.message }}</div>
+{% endif %}
+
+{% if render_context.warnings %}
+<section class="notice warn">
+  {% for warning in render_context.warnings %}
+  <p>{{ warning }}</p>
+  {% endfor %}
+</section>
+{% endif %}
+
+<section class="contract-detail-grid">
+  <div class="panel">
+    <div class="panel-header">
+      <div>
+        <h2>Contract</h2>
+        <p>{{ contract.client_business_name or prospect.business_name }}</p>
+      </div>
+      <span class="pill">{{ contract.status|pretty_label }}</span>
+    </div>
+    <dl class="detail-list">
+      <div>
+        <dt>Legal business</dt>
+        <dd>{{ contract.legal_business_name or "To confirm" }}</dd>
+      </div>
+      <div>
+        <dt>Entity type</dt>
+        <dd>{{ contract.business_entity_type or "To confirm" }}</dd>
+      </div>
+      <div>
+        <dt>Billing address</dt>
+        <dd>{{ contract.billing_address or "To confirm" }}</dd>
+      </div>
+      <div>
+        <dt>Effective / start</dt>
+        <dd>{{ contract.effective_date or "To confirm" }} / {{ contract.start_date or "To confirm" }}</dd>
+      </div>
+      <div>
+        <dt>Template</dt>
+        <dd>{{ contract.template_key or "service_contract" }}</dd>
+      </div>
+    </dl>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Links</h2>
+    </div>
+    <dl class="detail-list">
+      <div>
+        <dt>Prospect</dt>
+        <dd><a href="{{ url_for('case_file', prospect_id=prospect.id) }}">{{ prospect.business_name }}</a></dd>
+      </div>
+      <div>
+        <dt>Quote</dt>
+        <dd>
+          {% if quote %}
+          <a href="{{ url_for('quote_detail', quote_id=quote.id) }}">{{ quote.quote_key }}</a>
+          {% else %}
+          No linked quote
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>Website</dt>
+        <dd>{{ contract.website_url or prospect.website_url or "" }}</dd>
+      </div>
+      <div>
+        <dt>DocuSign</dt>
+        <dd>
+          {% if contract.docusign_envelope_id %}
+          {{ contract.docusign_status or "Status unknown" }} / {{ docusign.masked_envelope_id }}
+          {% else %}
+          Not sent
+          {% endif %}
+        </dd>
+      </div>
+    </dl>
+  </div>
+
+  <div class="panel quote-total-panel">
+    <div class="panel-header">
+      <h2>Totals</h2>
+    </div>
+    <dl class="detail-list score-list">
+      <div>
+        <dt>One-time total</dt>
+        <dd>{{ contract.one_time_total_cents|money }}</dd>
+      </div>
+      <div>
+        <dt>Monthly recurring</dt>
+        <dd>{{ contract.recurring_monthly_total_cents|money }}/mo</dd>
+      </div>
+      <div>
+        <dt>Deposit due</dt>
+        <dd>{{ contract.deposit_due_cents|money }}</dd>
+      </div>
+      <div>
+        <dt>Balance due</dt>
+        <dd>{{ contract.balance_due_cents|money }}</dd>
+      </div>
+      <div>
+        <dt>Term</dt>
+        <dd>{{ contract.term_months or 0 }} months</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+<section class="contract-detail-grid">
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Signers</h2>
+    </div>
+    <div class="contract-card-list">
+      {% for signer in contract.signers %}
+      <article class="contract-mini-card">
+        <strong>{{ signer.name or "Unnamed signer" }}</strong>
+        <span>{{ signer.title or "" }}</span>
+        <span>{{ signer.email or "" }}</span>
+        <span>{{ "Required" if signer.required else "Optional" }} / routing {{ signer.routing_order or loop.index }}</span>
+      </article>
+      {% else %}
+      <p class="empty">No signers configured.</p>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-header">
+      <h2>Generated Files</h2>
+    </div>
+    <dl class="detail-list">
+      <div>
+        <dt>HTML</dt>
+        <dd>
+          {{ contract.generated_html_path or "Not generated" }}
+          {% if contract.generated_files.generated_html_path.exists %}
+          <br><a href="{{ url_for('download_contract_html', contract_id=contract.id) }}">Download HTML</a>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>DOCX</dt>
+        <dd>
+          {{ contract.generated_docx_path or "Not generated" }}
+          {% if contract.generated_files.generated_docx_path.exists %}
+          <br><a href="{{ url_for('download_contract_docx', contract_id=contract.id) }}">Download DOCX</a>
+          {% endif %}
+        </dd>
+      </div>
+      <div>
+        <dt>PDF</dt>
+        <dd>{{ contract.generated_pdf_path or "Not generated" }}</dd>
+      </div>
+    </dl>
+  </div>
+</section>
+
+{% if contract.sections %}
+<section class="panel">
+  <div class="panel-header">
+    <h2>Additional Sections</h2>
+  </div>
+  <div class="contract-card-list">
+    {% for section in contract.sections %}
+    <article class="contract-mini-card">
+      <strong>{{ section.title or "Additional Section" }}</strong>
+      <p>{{ section.body }}</p>
+      <span>{{ "Requires signature" if section.requires_signature else "No signature required" }}</span>
+    </article>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+
+<section class="panel contract-actions-panel">
+  <div class="panel-header">
+    <h2>Actions</h2>
+  </div>
+  <div class="quote-action-forms">
+    <form method="post" action="{{ url_for('generate_contract', contract_id=contract.id) }}">
+      {{ csrf_input() }}
+      <button class="button primary" type="submit">Generate Contract</button>
+    </form>
+    <form method="post" action="{{ url_for('create_contract_revision', contract_id=contract.id) }}">
+      {{ csrf_input() }}
+      <button class="button" type="submit">Create Revision</button>
+    </form>
+    <form method="post" action="{{ url_for('void_contract', contract_id=contract.id) }}" onsubmit="return confirm('Void this contract? It will remain in history.');">
+      {{ csrf_input() }}
+      <button class="button danger" type="submit">Void</button>
+    </form>
+  </div>
+</section>
+
+<section class="panel contract-docusign-panel" id="docusign-panel">
+  <div class="panel-header">
+    <div>
+      <h2>DocuSign</h2>
+      <p>Sending creates a real DocuSign envelope in the configured DocuSign environment.</p>
+    </div>
+    <span class="pill">{{ docusign.config.environment_label }}</span>
+  </div>
+
+  {% if docusign.config.is_production %}
+  <div class="notice warn">
+    <p>Production DocuSign is configured. Submitting the send form can email real recipients through the live account.</p>
+  </div>
+  {% endif %}
+
+  <dl class="detail-list docusign-status-list">
+    <div>
+      <dt>Configuration</dt>
+      <dd>{{ "Configured" if docusign.config.configured else "Missing" }}</dd>
+    </div>
+    <div>
+      <dt>Environment</dt>
+      <dd>{{ docusign.config.environment_label }}{% if docusign.config.base_path %} / {{ docusign.config.base_path }}{% endif %}</dd>
+    </div>
+    <div>
+      <dt>Envelope</dt>
+      <dd>
+        {% if docusign.has_envelope %}
+        {{ docusign.masked_envelope_id }}
+        {% else %}
+        Not created
+        {% endif %}
+      </dd>
+    </div>
+    <div>
+      <dt>Envelope status</dt>
+      <dd>{{ docusign.status or "Not sent" }}{% if docusign.status_updated_at %} / {{ docusign.status_updated_at }}{% endif %}</dd>
+    </div>
+    <div>
+      <dt>Required signers</dt>
+      <dd>{{ docusign.required_signers|length }}</dd>
+    </div>
+  </dl>
+
+  <div class="contract-preflight-panel">
+    <h3>Preflight</h3>
+    <dl class="detail-list">
+      {% for item in docusign.preflight_items %}
+      <div>
+        <dt>{{ item.label }}</dt>
+        <dd>
+          <span class="pill">{{ item.status|pretty_label }}</span>
+          {{ item.detail }}
+        </dd>
+      </div>
+      {% endfor %}
+    </dl>
+  </div>
+
+  {% if docusign.config.errors %}
+  <div class="notice error">
+    {% for error in docusign.config.errors %}
+    <p>{{ error }}</p>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if docusign.preflight_errors %}
+  <div class="notice warn">
+    {% for error in docusign.preflight_errors %}
+    <p>{{ error }}</p>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if docusign.preflight_warnings %}
+  <div class="notice warn">
+    {% for warning in docusign.preflight_warnings %}
+    <p>{{ warning }}</p>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div class="quote-action-forms docusign-action-forms">
+    <form method="post" action="{{ url_for('send_contract_docusign', contract_id=contract.id) }}" onsubmit="return confirm('Create a DocuSign envelope for this contract?');">
+      {{ csrf_input() }}
+      <label class="quote-confirm-row">
+        <input type="checkbox" name="confirm_docusign_send" value="1" required>
+        I understand this creates a real DocuSign envelope in {{ docusign.config.environment_label }}.
+      </label>
+      {% if not docusign.docx_exists %}
+      <label class="quote-confirm-row">
+        <input type="checkbox" name="generate_before_send" value="1">
+        Generate local contract before sending.
+      </label>
+      {% endif %}
+      {% if docusign.active_envelope %}
+      <label class="quote-confirm-row">
+        <input type="checkbox" name="resend_supersede" value="1">
+        Resend/supersede the existing active envelope.
+      </label>
+      {% endif %}
+      <label class="quote-confirm-row">
+        <input type="checkbox" name="draft_only" value="1">
+        Create as DocuSign draft instead of sending now.
+      </label>
+      <button class="button primary" type="submit" {% if docusign.send_disabled %}disabled{% endif %}>Send to DocuSign</button>
+    </form>
+
+    {% if docusign.has_envelope %}
+    <form method="post" action="{{ url_for('refresh_contract_docusign_status', contract_id=contract.id) }}">
+      {{ csrf_input() }}
+      <button class="button" type="submit" {% if not docusign.config.configured %}disabled{% endif %}>Refresh DocuSign Status</button>
+    </form>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel">
+  <div class="panel-header">
+    <h2>Contract Events</h2>
+  </div>
+  <div class="timeline-list">
+    {% for event in contract.events %}
+    <article class="timeline-item">
+      <div>
+        <strong>{{ event.event_type|pretty_label }}</strong>
+        <p>{{ event.created_at or "" }}</p>
+      </div>
+      <dl class="detail-list">
+        <div>
+          <dt>Status</dt>
+          <dd>{{ event.status or "" }}</dd>
+        </div>
+        {% if event.note %}
+        <div>
+          <dt>Note</dt>
+          <dd>{{ event.note }}</dd>
+        </div>
+        {% endif %}
+      </dl>
+    </article>
+    {% else %}
+    <p class="empty">No contract events logged yet.</p>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

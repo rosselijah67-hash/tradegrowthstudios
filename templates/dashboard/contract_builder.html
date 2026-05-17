@@ -1,0 +1,218 @@
+{% extends "dashboard/base.html" %}
+
+{% block title %}{{ "Edit Contract" if mode == "edit" else "Create Contract" }} - {{ prospect.business_name }}{% endblock %}
+
+{% block content %}
+<section class="page-heading">
+  <div>
+    <a class="back-link" href="{{ url_for('case_file', prospect_id=prospect.id) }}">Back to case</a>
+    <h1>{{ "Edit Contract" if mode == "edit" else "Create Contract" }}</h1>
+    <p>{{ prospect.business_name }}{% if quote %} / {{ quote.quote_key }}{% endif %}</p>
+  </div>
+  <div class="quote-link-row">
+    {% if contract %}
+    <a class="button" href="{{ url_for('contract_detail', contract_id=contract.id) }}">View Contract</a>
+    {% endif %}
+    {% if quote %}
+    <a class="button" href="{{ url_for('quote_detail', quote_id=quote.id) }}">View Quote</a>
+    {% endif %}
+  </div>
+</section>
+
+{% if error %}
+<div class="notice error">{{ error }}</div>
+{% endif %}
+
+{% if mode == "new" and existing_contracts %}
+<section class="notice warn">
+  This quote already has {{ existing_contracts|length }} contract{{ "" if existing_contracts|length == 1 else "s" }}. Creating another draft is allowed for revisions or alternate signer scenarios.
+</section>
+{% endif %}
+
+<form class="contract-builder-form" method="post" action="{{ form_action }}">
+  {{ csrf_input() }}
+
+  <section class="panel contract-builder-section">
+    <div class="panel-header">
+      <div>
+        <h2>Source Quote</h2>
+        <p>Quote totals are copied into the contract record; pricing logic remains in the quote.</p>
+      </div>
+      {% if quote %}<span class="pill">{{ quote.status|pretty_label }}</span>{% endif %}
+    </div>
+    <div class="contract-summary-grid">
+      <div>
+        <span>Package</span>
+        <strong>{{ form_state.quote_summary.package_name }}</strong>
+      </div>
+      <div>
+        <span>One-time total</span>
+        <strong>{{ form_state.quote_summary.one_time_total_cents|money }}</strong>
+      </div>
+      <div>
+        <span>Monthly recurring</span>
+        <strong>{{ form_state.quote_summary.recurring_monthly_total_cents|money }}/mo</strong>
+      </div>
+      <div>
+        <span>Deposit due</span>
+        <strong>{{ form_state.quote_summary.deposit_due_cents|money }}</strong>
+      </div>
+      <div>
+        <span>Balance due</span>
+        <strong>{{ form_state.quote_summary.balance_due_cents|money }}</strong>
+      </div>
+      <div>
+        <span>Term</span>
+        <strong>{{ form_state.term_months or 0 }} months</strong>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel contract-builder-section">
+    <div class="panel-header">
+      <h2>Client And Legal Identity</h2>
+    </div>
+    <div class="contract-form-grid">
+      <label class="contract-wide-field">
+        <span>Contract title</span>
+        <input name="title" value="{{ form_state.title }}" required>
+      </label>
+      <label>
+        <span>Display business name</span>
+        <input name="client_business_name" value="{{ form_state.client_business_name }}">
+      </label>
+      <label>
+        <span>Client contact</span>
+        <input name="client_contact_name" value="{{ form_state.client_contact_name }}">
+      </label>
+      <label>
+        <span>Client email</span>
+        <input type="email" name="client_email" value="{{ form_state.client_email }}">
+      </label>
+      <label>
+        <span>Client phone</span>
+        <input name="client_phone" value="{{ form_state.client_phone }}">
+      </label>
+      <label>
+        <span>Website</span>
+        <input name="website_url" value="{{ form_state.website_url }}">
+      </label>
+      <label>
+        <span>Term months</span>
+        <input name="term_months" value="{{ form_state.term_months }}" inputmode="numeric">
+      </label>
+      <label>
+        <span>Legal business name</span>
+        <input name="legal_business_name" value="{{ form_state.legal_business_name }}" required>
+      </label>
+      <label>
+        <span>Entity type</span>
+        <input name="business_entity_type" value="{{ form_state.business_entity_type }}" placeholder="LLC, corporation, sole proprietor" required>
+      </label>
+      <label class="contract-wide-field">
+        <span>Billing address</span>
+        <input name="billing_address" value="{{ form_state.billing_address }}" required>
+      </label>
+      <label>
+        <span>Effective date</span>
+        <input type="date" name="effective_date" value="{{ form_state.effective_date }}" required>
+      </label>
+      <label>
+        <span>Start date</span>
+        <input type="date" name="start_date" value="{{ form_state.start_date }}" required>
+      </label>
+    </div>
+  </section>
+
+  <section class="panel contract-builder-section">
+    <div class="panel-header">
+      <div>
+        <h2>Client Signers</h2>
+        <p>Confirm signer authority manually before sending.</p>
+      </div>
+    </div>
+    <div class="contract-signer-list">
+      {% for signer in form_state.signers %}
+      {% set index = loop.index %}
+      <fieldset class="contract-signer-card">
+        <legend>{{ "Primary signer" if index == 1 else "Optional signer " ~ index }}</legend>
+        <div class="contract-form-grid">
+          <label>
+            <span>Name</span>
+            <input name="signer_name_{{ index }}" value="{{ signer.name }}" {% if index == 1 %}required{% endif %}>
+          </label>
+          <label>
+            <span>Title</span>
+            <input name="signer_title_{{ index }}" value="{{ signer.title }}" {% if index == 1 %}required{% endif %}>
+          </label>
+          <label>
+            <span>Email</span>
+            <input type="email" name="signer_email_{{ index }}" value="{{ signer.email }}" {% if index == 1 %}required{% endif %}>
+          </label>
+          <label>
+            <span>Phone</span>
+            <input name="signer_phone_{{ index }}" value="{{ signer.phone }}">
+          </label>
+          <label>
+            <span>Routing order</span>
+            <input name="signer_routing_order_{{ index }}" value="{{ signer.routing_order or index }}" inputmode="numeric">
+          </label>
+          <label class="check-row contract-checkbox-row">
+            <input type="checkbox" name="signer_required_{{ index }}" value="1" {% if signer.required or index == 1 %}checked{% endif %}>
+            <span>Required signature</span>
+          </label>
+        </div>
+      </fieldset>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="panel contract-builder-section">
+    <div class="panel-header">
+      <div>
+        <h2>Additional Sections</h2>
+        <p>Use only for salesman-confirmed language such as multi-member signature clauses.</p>
+      </div>
+    </div>
+    <div class="contract-section-list">
+      {% for section in form_state.sections %}
+      {% set index = loop.index %}
+      <fieldset class="contract-section-card">
+        <legend>Section {{ index }}</legend>
+        <div class="contract-form-grid">
+          <label>
+            <span>Title</span>
+            <input name="section_title_{{ index }}" value="{{ section.title }}">
+          </label>
+          <label>
+            <span>Signer index</span>
+            <input name="section_signer_index_{{ index }}" value="{{ section.signer_index }}" inputmode="numeric" placeholder="Optional">
+          </label>
+          <label class="check-row contract-checkbox-row">
+            <input type="checkbox" name="section_client_visible_{{ index }}" value="1" {% if section.client_visible %}checked{% endif %}>
+            <span>Client visible</span>
+          </label>
+          <label class="check-row contract-checkbox-row">
+            <input type="checkbox" name="section_requires_signature_{{ index }}" value="1" {% if section.requires_signature %}checked{% endif %}>
+            <span>Requires signature</span>
+          </label>
+          <label class="contract-wide-field">
+            <span>Body</span>
+            <textarea name="section_body_{{ index }}" rows="4">{{ section.body }}</textarea>
+          </label>
+        </div>
+      </fieldset>
+      {% endfor %}
+    </div>
+  </section>
+
+  <div class="quote-builder-actions">
+    <button class="button primary" type="submit">{{ "Save Contract" if mode == "edit" else "Create Contract" }}</button>
+    {% if contract %}
+    <a class="button" href="{{ url_for('contract_detail', contract_id=contract.id) }}">Cancel</a>
+    {% elif quote %}
+    <a class="button" href="{{ url_for('quote_detail', quote_id=quote.id) }}">Cancel</a>
+    {% endif %}
+  </div>
+</form>
+{% endblock %}

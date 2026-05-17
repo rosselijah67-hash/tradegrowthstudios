@@ -17,6 +17,7 @@ import sqlite3
 import ssl
 import sys
 import threading
+import xml.etree.ElementTree as ET
 import zipfile
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -32,7 +33,7 @@ from flask_login import LoginManager, current_user as flask_current_user, login_
 from markupsafe import Markup, escape
 
 from . import auth as auth_service
-from . import dashboard_jobs, db as pipeline_db, quote_exports, quotes as quote_service, state
+from . import contract_exports, contracts as contract_service, dashboard_jobs, db as pipeline_db, docusign_client, quote_exports, quotes as quote_service, state
 from . import tasks as task_service
 from . import territories
 from .config import (
@@ -106,6 +107,7 @@ PUBLIC_AUTH_ENDPOINTS = {
     "static",
     "public_packet_page",
     "public_packet_asset",
+    "docusign_webhook",
 }
 CSRF_SESSION_KEY = "_csrf_token"
 CSRF_FIELD_NAME = "csrf_token"
@@ -115,6 +117,7 @@ CSRF_EXEMPT_ENDPOINTS = {
     "static",
     "public_packet_page",
     "public_packet_asset",
+    "docusign_webhook",
 }
 CSRF_ERROR_MESSAGE = "Security token missing or expired. Refresh the page and try again."
 TRASH_MEDIA_RETENTION_DAYS = 3
@@ -887,6 +890,21 @@ def require_quote_access(quote_id: int) -> tuple[dict[str, Any], dict[str, Any]]
         abort(404)
     prospect = require_prospect_access(int(quote["prospect_id"]))
     return quote, prospect
+
+
+def require_contract_access(
+    contract_id: int,
+) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, Any]]:
+    contract = contract_service.load_contract(get_connection(), contract_id)
+    if contract is None:
+        abort(404)
+    prospect = require_prospect_access(int(contract["prospect_id"]))
+    quote = None
+    if contract.get("quote_id") is not None:
+        quote = quote_service.get_quote(get_connection(), int(contract["quote_id"]))
+        if quote is not None and int(quote["prospect_id"]) != int(contract["prospect_id"]):
+            abort(404)
+    return contract, quote, prospect
 
 
 def require_queue_access(queue_id: int | str) -> dict[str, Any]:
@@ -2688,6 +2706,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     dashboard_jobs.ensure_schema(app.config["DATABASE_PATH"])
     ensure_outreach_queue_schema(app.config["DATABASE_PATH"])
     pipeline_db.ensure_quote_schema_for_path(app.config["DATABASE_PATH"])
+    pipeline_db.ensure_contract_schema_for_path(app.config["DATABASE_PATH"])
     task_service.ensure_schema(app.config["DATABASE_PATH"])
     dashboard_jobs.mark_stale_jobs(app.config["DATABASE_PATH"])
 
@@ -3527,11 +3546,16 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     @require_dashboard_permission("quotes")
     def quote_detail(quote_id: int) -> str:
         quote, prospect = require_quote_access(quote_id)
+        contract_rows = contract_service.list_contracts_for_quote(get_connection(), quote_id)
+        for contract in contract_rows:
+            contract["generated_files"] = contract_generated_file_info(contract)
         return render_template(
             "dashboard/quote_detail.html",
             active_page="quotes",
             quote=quote,
             prospect=prospect,
+            contracts=contract_rows,
+            latest_contract=contract_rows[0] if contract_rows else None,
             message=quote_message_from_code(request.args.get("result")),
         )
 
@@ -3745,6 +3769,547 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         if return_to == "case":
             return redirect(url_for("case_file", prospect_id=int(quote["prospect_id"]), quote_result="deleted"))
         return redirect(url_for("quotes_list", result="deleted"))
+
+    @app.get("/contracts")
+    @require_dashboard_permission("quotes")
+    def contracts_list() -> str:
+        return render_template(
+            "dashboard/contracts_list.html",
+            active_page="contracts",
+            contracts=list_contracts_for_current_user(),
+            message=contract_message_from_code(request.args.get("result")),
+        )
+
+    @app.get("/quotes/<int:quote_id>/contract/new")
+    @require_dashboard_permission("quotes")
+    def new_contract_from_quote(quote_id: int) -> str:
+        quote, prospect = require_quote_access(quote_id)
+        contract_rows = contract_service.list_contracts_for_quote(get_connection(), quote_id)
+        return render_template(
+            "dashboard/contract_builder.html",
+            active_page="contracts",
+            mode="new",
+            contract=None,
+            quote=quote,
+            prospect=prospect,
+            existing_contracts=contract_rows,
+            form_state=contract_form_state(prospect, quote),
+            form_action=url_for("create_contract_from_quote", quote_id=quote_id),
+            error="",
+        )
+
+    @app.post("/quotes/<int:quote_id>/contract")
+    @require_dashboard_permission("quotes")
+    def create_contract_from_quote(quote_id: int):
+        quote, prospect = require_quote_access(quote_id)
+        contract_rows = contract_service.list_contracts_for_quote(get_connection(), quote_id)
+        try:
+            payload = parse_contract_builder_form(request.form)
+            connection = get_connection()
+            user = current_dashboard_user()
+            contract = contract_service.create_contract_from_quote(
+                connection,
+                quote_id,
+                created_by=user.username if user else None,
+            )
+            sync_contract_territory_fields(connection, int(contract["id"]), prospect)
+            contract_service.update_contract_header(connection, int(contract["id"]), payload["header"])
+            contract_service.update_contract_signers(connection, int(contract["id"]), payload["signers"])
+            contract_service.update_contract_sections(connection, int(contract["id"]), payload["sections"])
+            connection.commit()
+        except ValueError as exc:
+            if "connection" in locals():
+                connection.rollback()
+            return (
+                render_template(
+                    "dashboard/contract_builder.html",
+                    active_page="contracts",
+                    mode="new",
+                    contract=None,
+                    quote=quote,
+                    prospect=prospect,
+                    existing_contracts=contract_rows,
+                    form_state=contract_form_state(prospect, quote, form=request.form),
+                    form_action=url_for("create_contract_from_quote", quote_id=quote_id),
+                    error=str(exc),
+                ),
+                400,
+            )
+        return redirect(url_for("contract_detail", contract_id=contract["id"], result="created"))
+
+    @app.get("/contracts/<int:contract_id>")
+    @require_dashboard_permission("quotes")
+    def contract_detail(contract_id: int) -> str:
+        contract, quote, prospect = require_contract_access(contract_id)
+        contract["generated_files"] = contract_generated_file_info(contract)
+        render_context = contract_exports.build_contract_render_context(get_connection(), contract_id)
+        docusign = contract_docusign_view(contract, render_context=render_context)
+        return render_template(
+            "dashboard/contract_detail.html",
+            active_page="contracts",
+            contract=contract,
+            quote=quote,
+            prospect=prospect,
+            render_context=render_context,
+            docusign=docusign,
+            message=contract_message_from_code(request.args.get("result")),
+        )
+
+    @app.get("/contracts/<int:contract_id>/edit")
+    @require_dashboard_permission("quotes")
+    def edit_contract(contract_id: int) -> str:
+        contract, quote, prospect = require_contract_access(contract_id)
+        return render_template(
+            "dashboard/contract_builder.html",
+            active_page="contracts",
+            mode="edit",
+            contract=contract,
+            quote=quote,
+            prospect=prospect,
+            existing_contracts=[],
+            form_state=contract_form_state(prospect, quote, contract=contract),
+            form_action=url_for("update_contract", contract_id=contract_id),
+            error="",
+        )
+
+    @app.post("/contracts/<int:contract_id>/edit")
+    @require_dashboard_permission("quotes")
+    def update_contract(contract_id: int):
+        contract, quote, prospect = require_contract_access(contract_id)
+        connection = get_connection()
+        try:
+            payload = parse_contract_builder_form(request.form)
+            contract_service.update_contract_header(connection, contract_id, payload["header"])
+            contract_service.update_contract_signers(connection, contract_id, payload["signers"])
+            contract_service.update_contract_sections(connection, contract_id, payload["sections"])
+            connection.commit()
+        except ValueError as exc:
+            connection.rollback()
+            return (
+                render_template(
+                    "dashboard/contract_builder.html",
+                    active_page="contracts",
+                    mode="edit",
+                    contract=contract,
+                    quote=quote,
+                    prospect=prospect,
+                    existing_contracts=[],
+                    form_state=contract_form_state(prospect, quote, contract=contract, form=request.form),
+                    form_action=url_for("update_contract", contract_id=contract_id),
+                    error=str(exc),
+                ),
+                400,
+            )
+        return redirect(url_for("contract_detail", contract_id=contract_id, result="saved"))
+
+    @app.post("/contracts/<int:contract_id>/generate")
+    @require_dashboard_permission("quotes")
+    def generate_contract(contract_id: int):
+        require_contract_access(contract_id)
+        connection = get_connection()
+        try:
+            contract_exports.generate_contract_artifacts(connection, contract_id)
+            connection.commit()
+        except ValueError as exc:
+            connection.rollback()
+            return redirect(url_for("contract_detail", contract_id=contract_id, result=f"error:{exc}"))
+        except Exception:
+            connection.rollback()
+            logger.exception("Contract generation failed for contract %s", contract_id)
+            return redirect(url_for("contract_detail", contract_id=contract_id, result="error:Contract generation failed."))
+        return redirect(url_for("contract_detail", contract_id=contract_id, result="generated"))
+
+    @app.post("/contracts/<int:contract_id>/send-docusign")
+    @require_dashboard_permission("quotes")
+    def send_contract_docusign(contract_id: int):
+        contract, _quote, _prospect = require_contract_access(contract_id)
+        if request.form.get("confirm_docusign_send") != "1":
+            return redirect(
+                url_for(
+                    "contract_detail",
+                    contract_id=contract_id,
+                    result="error:Confirm the DocuSign send first. No envelope was created.",
+                )
+            )
+
+        config_status = docusign_config_status()
+        allow_active_envelope = request.form.get("resend_supersede") == "1"
+        generated_docx_path = resolve_contract_generated_docx_path(contract)
+        if generated_docx_path is None and request.form.get("generate_before_send") == "1":
+            connection = get_connection()
+            try:
+                contract_exports.generate_contract_artifacts(connection, contract_id)
+                connection.commit()
+                contract = contract_service.load_contract(connection, contract_id) or contract
+                generated_docx_path = resolve_contract_generated_docx_path(contract)
+            except ValueError as exc:
+                connection.rollback()
+                return redirect(url_for("contract_detail", contract_id=contract_id, result=f"error:{exc}"))
+            except Exception:
+                connection.rollback()
+                logger.exception("Contract generation failed before DocuSign send for contract %s", contract_id)
+                return redirect(
+                    url_for(
+                        "contract_detail",
+                        contract_id=contract_id,
+                        result="error:Contract generation failed before DocuSign send.",
+                    )
+                )
+
+        render_context = contract_exports.build_contract_render_context(get_connection(), contract_id)
+        preflight = build_contract_docusign_preflight(
+            contract,
+            config_status=config_status,
+            allow_active_envelope=allow_active_envelope,
+            render_context=render_context,
+        )
+        if preflight["errors"]:
+            return redirect(
+                url_for(
+                    "contract_detail",
+                    contract_id=contract_id,
+                    result="error:" + " ".join(preflight["errors"]),
+                )
+            )
+
+        generated_docx_path = resolve_contract_generated_docx_path(contract)
+        if generated_docx_path is None:
+            return redirect(
+                url_for(
+                    "contract_detail",
+                    contract_id=contract_id,
+                    result="error:Generated DOCX file is missing. No envelope was created.",
+                )
+            )
+        signers = contract_required_docusign_signers(contract)
+        envelope_status = "created" if request.form.get("draft_only") == "1" else "sent"
+        old_envelope_id = str(contract.get("docusign_envelope_id") or "").strip()
+        try:
+            send_result = docusign_client.send_envelope_from_document(
+                contract,
+                generated_docx_path,
+                signers,
+                status=envelope_status,
+            )
+            envelope_id = str(send_result.get("envelope_id") or "").strip()
+            if not envelope_id:
+                raise ValueError("DocuSign did not return an envelope ID.")
+            returned_status = normalize_docusign_status(send_result.get("status")) or envelope_status
+        except Exception as exc:
+            logger.warning(
+                "DocuSign send failed for contract %s with %s.",
+                contract_id,
+                type(exc).__name__,
+            )
+            return redirect(
+                url_for(
+                    "contract_detail",
+                    contract_id=contract_id,
+                    result=f"error:{contract_docusign_error_message(exc)}",
+                )
+            )
+
+        connection = get_connection()
+        try:
+            contract_service.update_docusign_status(
+                connection,
+                contract_id,
+                envelope_id=envelope_id,
+                status=returned_status,
+                metadata={
+                    "source": "dashboard_send_docusign",
+                    "environment": config_status["environment"],
+                    "requested_status": envelope_status,
+                    "status_date_time": send_result.get("status_date_time"),
+                    "uri": send_result.get("uri"),
+                    "old_envelope_id": old_envelope_id if allow_active_envelope else None,
+                },
+            )
+            contract_service.update_contract_status(
+                connection,
+                contract_id,
+                "sent",
+                note="DocuSign envelope created from generated contract.",
+                metadata={
+                    "docusign_envelope_id": envelope_id,
+                    "docusign_status": returned_status,
+                    "docusign_environment": config_status["environment"],
+                    "draft_only": envelope_status == "created",
+                },
+            )
+            contract_service.log_contract_event(
+                connection,
+                contract_id,
+                event_type="contract_docusign_sent",
+                status=returned_status,
+                note="DocuSign envelope created from generated contract.",
+                metadata={
+                    "envelope_id": envelope_id,
+                    "requested_status": envelope_status,
+                    "environment": config_status["environment"],
+                    "signer_count": len(signers),
+                    "resend_supersede": allow_active_envelope,
+                },
+            )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            logger.exception("Failed to store DocuSign envelope details for contract %s", contract_id)
+            return redirect(
+                url_for(
+                    "contract_detail",
+                    contract_id=contract_id,
+                    result="error:DocuSign envelope was created, but local CRM status could not be saved. Refresh status before retrying.",
+                )
+            )
+
+        result_code = "docusign_draft_created" if envelope_status == "created" else "docusign_sent"
+        return redirect(url_for("contract_detail", contract_id=contract_id, result=result_code))
+
+    @app.post("/contracts/<int:contract_id>/refresh-docusign-status")
+    @require_dashboard_permission("quotes")
+    def refresh_contract_docusign_status(contract_id: int):
+        contract, _quote, _prospect = require_contract_access(contract_id)
+        envelope_id = str(contract.get("docusign_envelope_id") or "").strip()
+        if not envelope_id:
+            return redirect(
+                url_for(
+                    "contract_detail",
+                    contract_id=contract_id,
+                    result="error:No DocuSign envelope ID is stored for this contract.",
+                )
+            )
+
+        config_status = docusign_config_status()
+        if not config_status["configured"]:
+            config_errors = "; ".join(config_status.get("errors") or [])
+            return redirect(
+                url_for(
+                    "contract_detail",
+                    contract_id=contract_id,
+                    result=f"error:DocuSign config is incomplete. {config_errors}",
+                )
+            )
+
+        try:
+            status_result = docusign_client.get_envelope_status(envelope_id)
+            returned_status = normalize_docusign_status(status_result.get("status")) or "unknown"
+        except Exception as exc:
+            logger.warning(
+                "DocuSign status refresh failed for contract %s with %s.",
+                contract_id,
+                type(exc).__name__,
+            )
+            return redirect(
+                url_for(
+                    "contract_detail",
+                    contract_id=contract_id,
+                    result=f"error:{contract_docusign_error_message(exc)}",
+                )
+            )
+
+        connection = get_connection()
+        try:
+            contract_service.update_docusign_status(
+                connection,
+                contract_id,
+                envelope_id=str(status_result.get("envelope_id") or envelope_id),
+                status=returned_status,
+                metadata={
+                    "source": "dashboard_refresh_docusign_status",
+                    "environment": config_status["environment"],
+                    "status_changed_date_time": status_result.get("status_changed_date_time"),
+                    "sent_date_time": status_result.get("sent_date_time"),
+                    "completed_date_time": status_result.get("completed_date_time"),
+                },
+            )
+            lifecycle = DOCUSIGN_REFRESH_STATUS_EVENTS.get(returned_status)
+            if lifecycle:
+                contract_status, event_type = lifecycle
+                contract_service.update_contract_status(
+                    connection,
+                    contract_id,
+                    contract_status,
+                    note=f"DocuSign envelope status refreshed as {returned_status}.",
+                    metadata={
+                        "docusign_envelope_id": envelope_id,
+                        "docusign_status": returned_status,
+                        "docusign_environment": config_status["environment"],
+                    },
+                )
+                contract_service.log_contract_event(
+                    connection,
+                    contract_id,
+                    event_type=event_type,
+                    status=returned_status,
+                    note=f"DocuSign envelope status refreshed as {returned_status}.",
+                    metadata={
+                        "envelope_id": envelope_id,
+                        "environment": config_status["environment"],
+                    },
+                )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            logger.exception("Failed to store DocuSign status for contract %s", contract_id)
+            return redirect(
+                url_for(
+                    "contract_detail",
+                    contract_id=contract_id,
+                    result="error:DocuSign status was fetched, but local CRM status could not be saved.",
+                )
+            )
+
+        return redirect(url_for("contract_detail", contract_id=contract_id, result="docusign_refreshed"))
+
+    @app.post("/webhooks/docusign")
+    def docusign_webhook():
+        if not docusign_webhook_enabled():
+            abort(404)
+        if not docusign_webhook_secret_configured():
+            return jsonify({"ok": False, "error": "webhook_not_configured"}), 403
+        if not validate_docusign_webhook_request():
+            logger.warning("Rejected DocuSign webhook with invalid shared secret.")
+            return jsonify({"ok": False, "error": "forbidden"}), 403
+
+        payload = parse_docusign_webhook_payload(request)
+        envelope_id = str(payload.get("envelope_id") or "").strip()
+        envelope_status = normalize_docusign_status(payload.get("status"))
+        event_name = str(payload.get("event") or "").strip()
+        if not envelope_id or not envelope_status:
+            logger.warning("Rejected DocuSign webhook with missing envelope id or status.")
+            return jsonify({"ok": False, "error": "missing_envelope_or_status"}), 400
+
+        connection = get_connection()
+        contract = find_contract_by_docusign_envelope_id(connection, envelope_id)
+        if contract is None:
+            contract_service.log_contract_event(
+                connection,
+                None,
+                event_type="docusign_webhook_contract_not_found",
+                status=envelope_status,
+                note="DocuSign webhook did not match a stored contract envelope.",
+                metadata={
+                    "envelope_id": mask_docusign_envelope_id(envelope_id),
+                    "event": event_name,
+                    "source": "docusign_webhook",
+                },
+            )
+            connection.commit()
+            return jsonify({"ok": True, "matched": False}), 202
+
+        try:
+            contract_service.update_docusign_status(
+                connection,
+                int(contract["id"]),
+                envelope_id=envelope_id,
+                status=envelope_status,
+                metadata={
+                    "source": "docusign_webhook",
+                    "event": event_name,
+                    "received_at": pipeline_db.utc_now(),
+                },
+            )
+            lifecycle = DOCUSIGN_REFRESH_STATUS_EVENTS.get(envelope_status)
+            if lifecycle:
+                contract_status, event_type = lifecycle
+                contract_service.update_contract_status(
+                    connection,
+                    int(contract["id"]),
+                    contract_status,
+                    note=f"DocuSign webhook status received as {envelope_status}.",
+                    metadata={
+                        "docusign_envelope_id": envelope_id,
+                        "docusign_status": envelope_status,
+                        "docusign_event": event_name,
+                        "source": "docusign_webhook",
+                    },
+                )
+                contract_service.log_contract_event(
+                    connection,
+                    int(contract["id"]),
+                    event_type=event_type,
+                    status=envelope_status,
+                    note=f"DocuSign webhook status received as {envelope_status}.",
+                    metadata={
+                        "envelope_id": envelope_id,
+                        "event": event_name,
+                        "source": "docusign_webhook",
+                    },
+                )
+            else:
+                contract_service.log_contract_event(
+                    connection,
+                    int(contract["id"]),
+                    event_type="contract_docusign_webhook_status",
+                    status=envelope_status,
+                    note=f"DocuSign webhook status received as {envelope_status}.",
+                    metadata={
+                        "envelope_id": envelope_id,
+                        "event": event_name,
+                        "source": "docusign_webhook",
+                    },
+                )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            logger.exception(
+                "Failed to apply DocuSign webhook status for contract %s.",
+                contract.get("id"),
+            )
+            return jsonify({"ok": False, "error": "status_update_failed"}), 500
+
+        return jsonify({"ok": True, "matched": True, "status": envelope_status})
+
+    @app.get("/contracts/<int:contract_id>/preview")
+    @require_dashboard_permission("quotes")
+    def contract_preview(contract_id: int):
+        require_contract_access(contract_id)
+        html = contract_exports.render_contract_html(get_connection(), contract_id)
+        return current_app.response_class(html, content_type="text/html; charset=utf-8")
+
+    @app.get("/contracts/<int:contract_id>/download/docx")
+    @require_dashboard_permission("quotes")
+    def download_contract_docx(contract_id: int):
+        contract, _quote, _prospect = require_contract_access(contract_id)
+        filename = f"{contract.get('contract_key') or 'contract'}.docx"
+        return contract_file_response(contract, "generated_docx_path", filename)
+
+    @app.get("/contracts/<int:contract_id>/download/html")
+    @require_dashboard_permission("quotes")
+    def download_contract_html(contract_id: int):
+        contract, _quote, _prospect = require_contract_access(contract_id)
+        filename = f"{contract.get('contract_key') or 'contract'}.html"
+        return contract_file_response(contract, "generated_html_path", filename)
+
+    @app.post("/contracts/<int:contract_id>/void")
+    @require_dashboard_permission("quotes")
+    def void_contract(contract_id: int):
+        require_contract_access(contract_id)
+        connection = get_connection()
+        contract_service.update_contract_status(
+            connection,
+            contract_id,
+            "voided",
+            note=str(request.form.get("note") or "").strip() or "Voided from dashboard.",
+            metadata={"source": "dashboard_contract_void"},
+        )
+        connection.commit()
+        return redirect(url_for("contract_detail", contract_id=contract_id, result="voided"))
+
+    @app.post("/contracts/<int:contract_id>/create-revision")
+    @require_dashboard_permission("quotes")
+    def create_contract_revision(contract_id: int):
+        _contract, _quote, prospect = require_contract_access(contract_id)
+        connection = get_connection()
+        try:
+            revision = contract_service.create_contract_revision(connection, contract_id)
+            sync_contract_territory_fields(connection, int(revision["id"]), prospect)
+            connection.commit()
+        except ValueError:
+            connection.rollback()
+            abort(404)
+        return redirect(url_for("contract_detail", contract_id=revision["id"], result="revision_created"))
 
     @app.get("/crm/stage/<stage>")
     def crm_stage(stage: str) -> str:
@@ -4022,6 +4587,13 @@ def create_app(db_path: str | Path | None = None) -> Flask:
         visual_issue_map = visual_findings.get("issues") or {}
         top_visual_issues = visual_findings.get("top_issues") or []
         quote_rows = quote_service.list_quotes_for_prospect(get_connection(), prospect_id)
+        contract_rows = (
+            contract_service.list_contracts_for_prospect(get_connection(), prospect_id)
+            if dashboard_user_has_permission("quotes")
+            else []
+        )
+        for contract in contract_rows:
+            contract["generated_files"] = contract_generated_file_info(contract)
         return render_template(
             "dashboard/case.html",
             active_page="leads",
@@ -4056,8 +4628,11 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             top_visual_issues=top_visual_issues,
             quotes=quote_rows,
             latest_quote=quote_rows[0] if quote_rows else None,
+            contracts=contract_rows,
+            latest_contract=contract_rows[0] if contract_rows else None,
             review_message=review_message_from_code(request.args.get("review")),
             quote_message=quote_message_from_code(request.args.get("quote_result")),
+            contract_message=contract_message_from_code(request.args.get("contract_result")),
         )
 
     @app.post("/case/<int:prospect_id>/review")
@@ -5396,6 +5971,1047 @@ def sync_quote_territory_fields(
         """,
         (owner_username or None, prospect_state_from_record(prospect), quote_id),
     )
+
+
+def list_contracts_for_current_user(limit: int = 200) -> list[dict[str, Any]]:
+    normalized_limit = max(1, min(int(limit or 200), 1000))
+    clauses = ["1 = 1"]
+    params: list[Any] = []
+    apply_prospect_scope(clauses, params, "p")
+    params.append(normalized_limit)
+    rows = get_connection().execute(
+        f"""
+        SELECT c.id, p.business_name AS prospect_business_name,
+               p.market AS prospect_market, p.niche AS prospect_niche,
+               q.quote_key AS quote_key, q.status AS quote_status
+        FROM contracts c
+        JOIN prospects p ON p.id = c.prospect_id
+        LEFT JOIN quotes q ON q.id = c.quote_id
+        WHERE {" AND ".join(clauses)}
+        ORDER BY c.updated_at DESC, c.id DESC
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+    contracts: list[dict[str, Any]] = []
+    connection = get_connection()
+    for row in rows:
+        contract = contract_service.load_contract(connection, int(row["id"]))
+        if contract is None:
+            continue
+        contract["prospect_business_name"] = row["prospect_business_name"]
+        contract["prospect_market"] = row["prospect_market"]
+        contract["prospect_niche"] = row["prospect_niche"]
+        contract["quote_key"] = row["quote_key"]
+        contract["quote_status"] = row["quote_status"]
+        contract["generated_files"] = contract_generated_file_info(contract)
+        contracts.append(contract)
+    return contracts
+
+
+def sync_contract_territory_fields(
+    connection: sqlite3.Connection,
+    contract_id: int,
+    prospect: dict[str, Any],
+) -> None:
+    user = current_dashboard_user()
+    owner_username = str(prospect.get("owner_username") or "").strip()
+    if not owner_username and user is not None:
+        owner_username = user.username
+    connection.execute(
+        """
+        UPDATE contracts
+        SET owner_username = ?,
+            market_state = ?
+        WHERE id = ?
+        """,
+        (owner_username or None, prospect_state_from_record(prospect), contract_id),
+    )
+
+
+def contract_generated_file_info(contract: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    files = {}
+    for key, label in (
+        ("generated_docx_path", "DOCX"),
+        ("generated_html_path", "HTML"),
+        ("generated_pdf_path", "PDF"),
+    ):
+        path = str(contract.get(key) or "").strip()
+        resolved = resolve_media_path(path) if path else None
+        files[key] = {
+            "label": label,
+            "path": path,
+            "exists": bool(resolved and resolved.exists() and resolved.is_file()),
+        }
+    return files
+
+
+DOCUSIGN_FINAL_ENVELOPE_STATUSES = {"completed", "declined", "voided", "deleted"}
+DOCUSIGN_REFRESH_STATUS_EVENTS = {
+    "sent": ("sent", "contract_sent"),
+    "delivered": ("delivered", "contract_delivered"),
+    "completed": ("completed", "contract_completed"),
+    "declined": ("declined", "contract_declined"),
+    "voided": ("voided", "contract_voided"),
+}
+DOCUSIGN_WEBHOOK_SECRET_HEADER_NAMES = (
+    "X-DocuSign-Webhook-Secret",
+    "X-DocuSign-Connect-Secret",
+    "X-Webhook-Secret",
+)
+DOCUSIGN_WEBHOOK_EVENT_PREFIX = "envelope-"
+DOCUSIGN_WEBHOOK_STATUS_VALUES = {
+    "created",
+    "sent",
+    "delivered",
+    "completed",
+    "declined",
+    "voided",
+}
+
+
+def docusign_config_status() -> dict[str, Any]:
+    try:
+        config = docusign_client.load_docusign_config()
+        errors = docusign_client.validate_docusign_config(
+            config,
+            check_private_key_file=True,
+        )
+    except Exception:
+        return {
+            "configured": False,
+            "environment": "unknown",
+            "environment_label": "Unknown",
+            "is_production": False,
+            "base_path": "",
+            "auth_server": "",
+            "private_key_configured": False,
+            "private_key_exists": False,
+            "errors": ["DocuSign configuration could not be loaded."],
+        }
+    environment = str(config.environment or "demo").strip().lower()
+    return {
+        "configured": not errors,
+        "environment": environment,
+        "environment_label": "Production" if environment == "production" else "Demo",
+        "is_production": environment == "production",
+        "base_path": config.base_path,
+        "auth_server": config.auth_server,
+        "private_key_configured": bool(config.rsa_private_key_path),
+        "private_key_exists": bool(config.rsa_private_key_path.exists()),
+        "errors": errors,
+    }
+
+
+def docusign_webhook_enabled() -> bool:
+    value = str(os.environ.get("DOCUSIGN_WEBHOOK_ENABLED") or "false").strip().lower()
+    return value in {"1", "true", "yes", "y", "on", "enabled"}
+
+
+def docusign_webhook_secret() -> str:
+    return str(os.environ.get("DOCUSIGN_WEBHOOK_SECRET") or "").strip()
+
+
+def docusign_webhook_secret_configured() -> bool:
+    return bool(docusign_webhook_secret())
+
+
+def validate_docusign_webhook_request() -> bool:
+    configured_secret = docusign_webhook_secret()
+    if not configured_secret:
+        return False
+
+    candidates = []
+    for header_name in DOCUSIGN_WEBHOOK_SECRET_HEADER_NAMES:
+        value = str(request.headers.get(header_name) or "").strip()
+        if value:
+            candidates.append(value)
+    authorization = str(request.headers.get("Authorization") or "").strip()
+    if authorization.lower().startswith("bearer "):
+        candidates.append(authorization[7:].strip())
+
+    return any(secrets.compare_digest(configured_secret, candidate) for candidate in candidates)
+
+
+def parse_docusign_webhook_payload(webhook_request: Any) -> dict[str, str]:
+    payload: Any = None
+    if webhook_request.is_json:
+        payload = webhook_request.get_json(silent=True)
+    raw_body = webhook_request.get_data(cache=True, as_text=False) or b""
+    text_body = raw_body.decode("utf-8", errors="ignore").strip()
+
+    if payload is None and text_body:
+        if text_body.startswith("{") or text_body.startswith("["):
+            try:
+                payload = json.loads(text_body)
+            except json.JSONDecodeError:
+                payload = None
+        elif text_body.startswith("<"):
+            return parse_docusign_webhook_xml(text_body)
+
+    if isinstance(payload, (dict, list)):
+        event_name = extract_json_value(payload, {"event", "eventname"}) or ""
+        status = extract_json_value(payload, {"status", "envelopestatus"}) or status_from_docusign_event(event_name)
+        return {
+            "envelope_id": extract_json_value(payload, {"envelopeid"}) or "",
+            "status": normalize_docusign_status(status),
+            "event": event_name,
+        }
+    return {"envelope_id": "", "status": "", "event": ""}
+
+
+def parse_docusign_webhook_xml(text_body: str) -> dict[str, str]:
+    try:
+        root = ET.fromstring(text_body)
+    except ET.ParseError:
+        return {"envelope_id": "", "status": "", "event": ""}
+    event_name = extract_xml_text(root, {"event", "eventname"}) or ""
+    status = extract_xml_text(root, {"status", "envelopestatus"}) or status_from_docusign_event(event_name)
+    return {
+        "envelope_id": extract_xml_text(root, {"envelopeid"}) or "",
+        "status": normalize_docusign_status(status),
+        "event": event_name,
+    }
+
+
+def extract_json_value(payload: Any, normalized_keys: set[str]) -> str:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if normalize_payload_key(key) in normalized_keys and value not in (None, ""):
+                if isinstance(value, (str, int, float)):
+                    return str(value).strip()
+        for value in payload.values():
+            found = extract_json_value(value, normalized_keys)
+            if found:
+                return found
+    elif isinstance(payload, list):
+        for value in payload:
+            found = extract_json_value(value, normalized_keys)
+            if found:
+                return found
+    return ""
+
+
+def extract_xml_text(root: ET.Element, normalized_tags: set[str]) -> str:
+    for element in root.iter():
+        if normalize_payload_key(xml_local_name(element.tag)) not in normalized_tags:
+            continue
+        text = str(element.text or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def status_from_docusign_event(event_name: str) -> str:
+    event = str(event_name or "").strip().lower()
+    if not event.startswith(DOCUSIGN_WEBHOOK_EVENT_PREFIX):
+        return ""
+    candidate = event.removeprefix(DOCUSIGN_WEBHOOK_EVENT_PREFIX).strip()
+    return candidate if candidate in DOCUSIGN_WEBHOOK_STATUS_VALUES else ""
+
+
+def normalize_payload_key(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def xml_local_name(tag: str) -> str:
+    return str(tag or "").rsplit("}", 1)[-1]
+
+
+def find_contract_by_docusign_envelope_id(
+    connection: sqlite3.Connection,
+    envelope_id: str,
+) -> dict[str, Any] | None:
+    rows = contract_service.list_contracts(
+        connection,
+        {"docusign_envelope_id": envelope_id, "limit": 1},
+    )
+    if not rows:
+        return None
+    return contract_service.load_contract(connection, int(rows[0]["id"]))
+
+
+def contract_docusign_view(
+    contract: dict[str, Any],
+    render_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    config = docusign_config_status()
+    generated_files = contract.get("generated_files")
+    if not isinstance(generated_files, dict):
+        generated_files = contract_generated_file_info(contract)
+    docx_file = generated_files.get("generated_docx_path", {})
+    preflight = build_contract_docusign_preflight(
+        contract,
+        config_status=config,
+        allow_active_envelope=False,
+        render_context=render_context,
+    )
+    return {
+        "config": config,
+        "masked_envelope_id": mask_docusign_envelope_id(contract.get("docusign_envelope_id")),
+        "has_envelope": bool(str(contract.get("docusign_envelope_id") or "").strip()),
+        "active_envelope": contract_has_active_docusign_envelope(contract),
+        "status": str(contract.get("docusign_status") or "").strip(),
+        "status_updated_at": contract.get("docusign_status_updated_at"),
+        "docx_exists": bool(docx_file.get("exists")),
+        "required_signers": contract_required_docusign_signers(contract),
+        "preflight": preflight,
+        "preflight_errors": preflight["errors"],
+        "preflight_warnings": preflight["warnings"],
+        "preflight_items": preflight["items"],
+        "ready_to_send": preflight["ready"],
+        "send_disabled": not config["configured"],
+    }
+
+
+def build_contract_docusign_preflight(
+    contract: dict[str, Any],
+    *,
+    config_status: dict[str, Any] | None = None,
+    allow_active_envelope: bool,
+    render_context: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return DocuSign readiness details without calling DocuSign."""
+
+    errors: list[str] = []
+    warnings: list[str] = []
+    config = config_status or docusign_config_status()
+    docx_path = resolve_contract_generated_docx_path(contract)
+    docx_path_value = str(contract.get("generated_docx_path") or "").strip()
+    active_envelope = contract_has_active_docusign_envelope(contract)
+    status = normalize_docusign_status(contract.get("status")) or "draft"
+    primary_signer = contract_primary_signer_record(contract)
+    business_context = docusign_context_section(render_context, "business")
+    quote_context = docusign_context_section(render_context, "quote")
+    contract_context = docusign_context_section(render_context, "contract")
+
+    if not config.get("configured"):
+        config_errors = "; ".join(config.get("errors") or [])
+        errors.append(
+            "DocuSign config is incomplete."
+            + (f" {config_errors}" if config_errors else "")
+        )
+
+    if status in {"completed", "declined", "voided", "superseded"}:
+        errors.append("Create a revision before sending this contract status to DocuSign.")
+    elif active_envelope and not allow_active_envelope:
+        errors.append(
+            "This contract already has an active DocuSign envelope. Check resend/supersede to create another envelope."
+        )
+    elif status not in {"generated", "draft", "sent", "delivered", "error"}:
+        errors.append("Generate the contract before sending it to DocuSign.")
+    elif status == "draft" and docx_path is None:
+        errors.append("Draft contracts need an existing generated DOCX before DocuSign send.")
+
+    if not docx_path_value:
+        errors.append("Generated DOCX path is required before DocuSign send.")
+    elif docx_path is None:
+        errors.append("Generated DOCX file does not exist at the stored path.")
+
+    if not docusign_first_value(contract.get("legal_business_name"), business_context.get("legal_name")):
+        errors.append("Legal business name must be confirmed before DocuSign send.")
+    if not docusign_first_value(contract.get("business_entity_type"), business_context.get("entity_type")):
+        errors.append("Business entity type must be confirmed before DocuSign send.")
+    if not docusign_first_value(primary_signer.get("name"), contract.get("signer_name")):
+        errors.append("Primary signer name must be confirmed before DocuSign send.")
+    if not docusign_first_value(primary_signer.get("title"), contract.get("signer_title")):
+        errors.append("Primary signer authority/title must be confirmed before DocuSign send.")
+    if not docusign_first_value(primary_signer.get("email"), contract.get("signer_email")):
+        errors.append("Primary signer email must be confirmed before DocuSign send.")
+    if not docusign_first_value(contract.get("effective_date"), contract_context.get("effective_date")):
+        errors.append("Contract effective date must be confirmed before DocuSign send.")
+    if not docusign_first_value(quote_context.get("package_name")):
+        errors.append("Quote package name is required before DocuSign send.")
+    if not contract_has_billable_amount(contract, quote_context):
+        errors.append("A one-time total or recurring monthly amount is required before DocuSign send.")
+
+    signer_errors, signer_warnings = contract_docusign_signer_preflight_messages(contract)
+    errors.extend(signer_errors)
+    warnings.extend(signer_warnings)
+
+    anchor_check = contract_docusign_anchor_check(docx_path)
+    if anchor_check["missing"]:
+        errors.append("Missing DocuSign anchors: " + ", ".join(anchor_check["missing"]))
+    if anchor_check["error"]:
+        errors.append(anchor_check["error"])
+
+    errors = dedupe_strings(errors)
+    warnings = dedupe_strings(warnings)
+    ready = not errors
+    return {
+        "ready": ready,
+        "errors": errors,
+        "warnings": warnings,
+        "items": contract_docusign_preflight_items(
+            ready=ready,
+            config=config,
+            contract=contract,
+            docx_path=docx_path,
+            primary_signer=primary_signer,
+            anchor_check=anchor_check,
+            optional_signer_warnings=signer_warnings,
+        ),
+        "anchors": anchor_check,
+    }
+
+
+def validate_contract_docusign_send_preconditions(
+    contract: dict[str, Any],
+    *,
+    config_status: dict[str, Any] | None = None,
+    allow_active_envelope: bool,
+    render_context: dict[str, Any] | None = None,
+) -> list[str]:
+    return build_contract_docusign_preflight(
+        contract,
+        config_status=config_status,
+        allow_active_envelope=allow_active_envelope,
+        render_context=render_context,
+    )["errors"]
+
+
+def contract_required_docusign_signers(contract: dict[str, Any]) -> list[dict[str, Any]]:
+    signers = []
+    for index, signer in enumerate(contract_signer_records(contract), start=1):
+        if not contract_signer_is_required(signer, index):
+            continue
+        name = str(signer.get("name") or "").strip()
+        title = str(signer.get("title") or "").strip()
+        email = str(signer.get("email") or "").strip()
+        if not name or not title or not email:
+            continue
+        signers.append(
+            {
+                "role": "client",
+                "name": name,
+                "title": title,
+                "email": email,
+                "phone": str(signer.get("phone") or "").strip(),
+                "required": True,
+                "_anchor_index": index,
+                "routing_order": parse_safe_int(signer.get("routing_order"), default=index),
+            }
+        )
+    return signers[:3]
+
+
+def contract_required_docusign_signer_errors(contract: dict[str, Any]) -> list[str]:
+    errors, _warnings = contract_docusign_signer_preflight_messages(contract)
+    return errors
+
+
+def contract_docusign_signer_preflight_messages(contract: dict[str, Any]) -> tuple[list[str], list[str]]:
+    records = contract_signer_records(contract)
+    errors: list[str] = []
+    warnings: list[str] = []
+    required_count = 0
+    complete_count = 0
+    for index, signer in enumerate(records, start=1):
+        name = str(signer.get("name") or "").strip()
+        title = str(signer.get("title") or "").strip()
+        email = str(signer.get("email") or "").strip()
+        required = contract_signer_is_required(signer, index)
+        if not required:
+            if index > 1 and any((name, title, email)) and not all((name, title, email)):
+                warnings.append(
+                    f"Optional signer {index} is incomplete; complete name, title, and email or leave it optional/incomplete."
+                )
+            continue
+        required_count += 1
+        missing = []
+        if not name:
+            missing.append("name")
+        if not title:
+            missing.append("title")
+        if not email:
+            missing.append("email")
+        if not missing:
+            complete_count += 1
+        else:
+            errors.append(
+                f"Signer {index} is marked required but is missing " + ", ".join(missing) + "."
+            )
+    if required_count == 0:
+        errors.append("At least one signer must be marked required before DocuSign send.")
+    elif complete_count == 0:
+        errors.append("At least one required signer needs name, title, and email before DocuSign send.")
+    return errors, warnings
+
+
+def contract_primary_signer_record(contract: dict[str, Any]) -> dict[str, Any]:
+    records = contract_signer_records(contract)
+    if records:
+        return records[0]
+    return {
+        "name": str(contract.get("signer_name") or "").strip(),
+        "title": str(contract.get("signer_title") or "").strip(),
+        "email": str(contract.get("signer_email") or "").strip(),
+        "phone": str(contract.get("signer_phone") or "").strip(),
+        "required": True,
+        "routing_order": 1,
+    }
+
+
+def contract_signer_is_required(signer: dict[str, Any], index: int) -> bool:
+    return index == 1 or truthy_checkbox(signer.get("required"), default=index == 1)
+
+
+def docusign_context_section(
+    render_context: dict[str, Any] | None,
+    section: str,
+) -> dict[str, Any]:
+    if not isinstance(render_context, dict):
+        return {}
+    value = render_context.get(section)
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def docusign_first_value(*values: Any) -> str:
+    for value in values:
+        text = str(value or "").strip()
+        if text:
+            return text
+    return ""
+
+
+def contract_has_billable_amount(
+    contract: dict[str, Any],
+    quote_context: dict[str, Any],
+) -> bool:
+    if parse_safe_int(contract.get("one_time_total_cents"), default=0) > 0:
+        return True
+    if parse_safe_int(contract.get("recurring_monthly_total_cents"), default=0) > 0:
+        return True
+    if parse_safe_int(quote_context.get("one_time_total_cents"), default=0) > 0:
+        return True
+    if parse_safe_int(quote_context.get("recurring_monthly_total_cents"), default=0) > 0:
+        return True
+    return False
+
+
+def contract_docusign_preflight_items(
+    *,
+    ready: bool,
+    config: dict[str, Any],
+    contract: dict[str, Any],
+    docx_path: Path | None,
+    primary_signer: dict[str, Any],
+    anchor_check: dict[str, Any],
+    optional_signer_warnings: list[str],
+) -> list[dict[str, str]]:
+    return [
+        {
+            "label": "Ready to send",
+            "status": "ok" if ready else "error",
+            "detail": "All required preflight checks passed." if ready else "Resolve the required items before sending.",
+        },
+        {
+            "label": "Missing legal business name",
+            "status": "ok" if str(contract.get("legal_business_name") or "").strip() else "error",
+            "detail": "Confirmed." if str(contract.get("legal_business_name") or "").strip() else "Add the client's legal business name.",
+        },
+        {
+            "label": "Missing signer title",
+            "status": "ok" if str(primary_signer.get("title") or contract.get("signer_title") or "").strip() else "error",
+            "detail": "Confirmed." if str(primary_signer.get("title") or contract.get("signer_title") or "").strip() else "Add the primary signer's title or authority.",
+        },
+        {
+            "label": "Missing generated DOCX",
+            "status": "ok" if docx_path is not None else "error",
+            "detail": str(docx_path) if docx_path is not None else "Generate the contract before sending.",
+        },
+        {
+            "label": "Missing DocuSign config",
+            "status": "ok" if config.get("configured") else "error",
+            "detail": "Configured." if config.get("configured") else "Complete the DocuSign environment settings.",
+        },
+        {
+            "label": "Missing anchors",
+            "status": "ok" if not anchor_check.get("missing") and not anchor_check.get("error") else "error",
+            "detail": (
+                f"All anchors present in {anchor_check.get('source_label')}."
+                if not anchor_check.get("missing") and not anchor_check.get("error")
+                else anchor_check.get("error") or ", ".join(anchor_check.get("missing") or [])
+            ),
+        },
+        {
+            "label": "Optional signers incomplete",
+            "status": "warn" if optional_signer_warnings else "ok",
+            "detail": " ".join(optional_signer_warnings) if optional_signer_warnings else "No optional signer blocker.",
+        },
+    ]
+
+
+def contract_docusign_anchor_check(generated_docx_path: Path | None) -> dict[str, Any]:
+    source_path = generated_docx_path or contract_docusign_template_path()
+    required = required_docusign_anchor_strings()
+    if source_path is None:
+        return {
+            "source_path": "",
+            "source_label": "missing template",
+            "required": required,
+            "missing": required,
+            "error": "No generated DOCX or contract template is available for anchor validation.",
+        }
+    text, error = read_docx_text_for_anchor_check(source_path)
+    missing = [anchor for anchor in required if anchor not in text]
+    return {
+        "source_path": str(source_path),
+        "source_label": "generated DOCX" if generated_docx_path else "contract template",
+        "required": required,
+        "missing": missing,
+        "error": error,
+    }
+
+
+def contract_docusign_template_path() -> Path | None:
+    for path in (contract_exports.PRIMARY_DOCX_TEMPLATE, contract_exports.FALLBACK_DOCX_TEMPLATE):
+        if path.exists() and path.is_file():
+            return path
+    return None
+
+
+def required_docusign_anchor_strings() -> list[str]:
+    anchors = [
+        docusign_client.PROVIDER_ANCHORS["sign"],
+        docusign_client.PROVIDER_ANCHORS["date"],
+    ]
+    for index in sorted(docusign_client.CLIENT_ANCHORS):
+        anchors.append(docusign_client.CLIENT_ANCHORS[index]["sign"])
+        anchors.append(docusign_client.CLIENT_ANCHORS[index]["date"])
+    return anchors
+
+
+def read_docx_text_for_anchor_check(path: Path) -> tuple[str, str]:
+    try:
+        with zipfile.ZipFile(path) as archive:
+            parts = []
+            for name in archive.namelist():
+                if not name.startswith("word/") or not name.endswith(".xml"):
+                    continue
+                if name != "word/document.xml" and not re.match(r"word/(header|footer)\d*\.xml$", name):
+                    continue
+                try:
+                    root = ET.fromstring(archive.read(name))
+                except ET.ParseError:
+                    continue
+                parts.append("".join(root.itertext()))
+    except (OSError, zipfile.BadZipFile) as exc:
+        return "", f"Could not inspect DOCX anchors in {path}: {exc}"
+    return "\n".join(parts), ""
+
+
+def contract_signer_records(contract: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_signers = contract.get("signers")
+    records: list[dict[str, Any]] = []
+    if isinstance(raw_signers, list):
+        for signer in raw_signers[:3]:
+            if isinstance(signer, dict):
+                records.append(dict(signer))
+    if not records:
+        records.append(
+            {
+                "role": "client",
+                "name": str(contract.get("signer_name") or "").strip(),
+                "title": str(contract.get("signer_title") or "").strip(),
+                "email": str(contract.get("signer_email") or "").strip(),
+                "phone": str(contract.get("signer_phone") or "").strip(),
+                "required": True,
+                "routing_order": 1,
+            }
+        )
+    return records[:3]
+
+
+def resolve_contract_generated_docx_path(contract: dict[str, Any]) -> Path | None:
+    path = str(contract.get("generated_docx_path") or "").strip()
+    resolved = resolve_media_path(path) if path else None
+    if resolved is None or not resolved.exists() or not resolved.is_file():
+        return None
+    return resolved
+
+
+def contract_has_active_docusign_envelope(contract: dict[str, Any]) -> bool:
+    envelope_id = str(contract.get("docusign_envelope_id") or "").strip()
+    if not envelope_id:
+        return False
+    status = normalize_docusign_status(contract.get("docusign_status"))
+    return not status or status not in DOCUSIGN_FINAL_ENVELOPE_STATUSES
+
+
+def mask_docusign_envelope_id(envelope_id: Any) -> str:
+    clean = str(envelope_id or "").strip()
+    if not clean:
+        return ""
+    if len(clean) <= 12:
+        return clean[:4] + "..." if len(clean) > 4 else clean
+    return f"{clean[:8]}...{clean[-4:]}"
+
+
+def normalize_docusign_status(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def truthy_checkbox(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on", "required"}
+
+
+def parse_safe_int(value: Any, *, default: int) -> int:
+    try:
+        return int(value if value not in (None, "") else default)
+    except (TypeError, ValueError):
+        return default
+
+
+def dedupe_strings(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    output = []
+    for value in values:
+        clean = str(value or "").strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            output.append(clean)
+    return output
+
+
+def contract_docusign_error_message(exc: Exception) -> str:
+    if isinstance(
+        exc,
+        (
+            docusign_client.DocusignConfigurationError,
+            docusign_client.DocusignDependencyError,
+            ValueError,
+            FileNotFoundError,
+        ),
+    ):
+        return str(exc)
+    return "DocuSign request failed. Check configuration, JWT consent, and the configured DocuSign environment."
+
+
+def contract_form_state(
+    prospect: dict[str, Any],
+    quote: dict[str, Any] | None = None,
+    *,
+    contract: dict[str, Any] | None = None,
+    form: Any | None = None,
+) -> dict[str, Any]:
+    contact_name = str((quote or {}).get("client_contact_name") or "").strip()
+    contact_email = str((quote or {}).get("client_email") or "").strip()
+    contact_phone = str((quote or {}).get("client_phone") or "").strip()
+    business_name = str(
+        (contract or {}).get("client_business_name")
+        or (quote or {}).get("client_business_name")
+        or prospect.get("business_name")
+        or ""
+    ).strip()
+    state = {
+        "title": str(
+            (contract or {}).get("title")
+            or f"Service Agreement for {business_name or 'Client'}"
+        ).strip(),
+        "client_business_name": business_name,
+        "client_contact_name": str((contract or {}).get("client_contact_name") or contact_name).strip(),
+        "client_email": str((contract or {}).get("client_email") or contact_email).strip(),
+        "client_phone": str((contract or {}).get("client_phone") or contact_phone).strip(),
+        "website_url": str(
+            (contract or {}).get("website_url")
+            or (quote or {}).get("website_url")
+            or prospect.get("website_url")
+            or ""
+        ).strip(),
+        "legal_business_name": str((contract or {}).get("legal_business_name") or "").strip(),
+        "business_entity_type": str((contract or {}).get("business_entity_type") or "").strip(),
+        "billing_address": str(
+            (contract or {}).get("billing_address")
+            or prospect.get("formatted_address")
+            or prospect.get("address")
+            or ""
+        ).strip(),
+        "signer_name": str((contract or {}).get("signer_name") or contact_name).strip(),
+        "signer_title": str((contract or {}).get("signer_title") or "").strip(),
+        "signer_email": str((contract or {}).get("signer_email") or contact_email).strip(),
+        "signer_phone": str((contract or {}).get("signer_phone") or contact_phone).strip(),
+        "effective_date": str((contract or {}).get("effective_date") or "").strip(),
+        "start_date": str((contract or {}).get("start_date") or "").strip(),
+        "term_months": str(
+            (contract or {}).get("term_months")
+            if (contract or {}).get("term_months") not in (None, "")
+            else (quote or {}).get("term_months") or 0
+        ),
+        "quote_summary": {
+            "package_name": (quote or {}).get("package_name") or "Custom",
+            "one_time_total_cents": (contract or {}).get("one_time_total_cents")
+            if (contract or {}).get("one_time_total_cents") is not None
+            else (quote or {}).get("one_time_total_cents"),
+            "recurring_monthly_total_cents": (contract or {}).get("recurring_monthly_total_cents")
+            if (contract or {}).get("recurring_monthly_total_cents") is not None
+            else (quote or {}).get("recurring_monthly_total_cents"),
+            "deposit_due_cents": (contract or {}).get("deposit_due_cents")
+            if (contract or {}).get("deposit_due_cents") is not None
+            else (quote or {}).get("deposit_due_cents"),
+            "balance_due_cents": (contract or {}).get("balance_due_cents")
+            if (contract or {}).get("balance_due_cents") is not None
+            else (quote or {}).get("balance_due_cents"),
+        },
+        "signers": contract_signer_form_state(contract),
+        "sections": contract_section_form_state(contract),
+    }
+    if contract is None and state["signers"]:
+        state["signers"][0].update(
+            {
+                "name": state["signer_name"],
+                "title": state["signer_title"],
+                "email": state["signer_email"],
+                "phone": state["signer_phone"],
+                "required": True,
+                "routing_order": 1,
+            }
+        )
+    if form is not None:
+        for key in (
+            "title",
+            "client_business_name",
+            "client_contact_name",
+            "client_email",
+            "client_phone",
+            "website_url",
+            "legal_business_name",
+            "business_entity_type",
+            "billing_address",
+            "signer_name",
+            "signer_title",
+            "signer_email",
+            "signer_phone",
+            "effective_date",
+            "start_date",
+            "term_months",
+        ):
+            state[key] = str(form.get(key) or "").strip()
+        state["signers"] = contract_signers_from_form_state(form)
+        state["sections"] = contract_sections_from_form_state(form)
+    return state
+
+
+def contract_signer_form_state(contract: dict[str, Any] | None) -> list[dict[str, Any]]:
+    signers = []
+    if contract and isinstance(contract.get("signers"), list):
+        signers = [dict(signer) for signer in contract["signers"][:3] if isinstance(signer, dict)]
+    if not signers and contract:
+        signers = [
+            {
+                "name": contract.get("signer_name") or "",
+                "title": contract.get("signer_title") or "",
+                "email": contract.get("signer_email") or "",
+                "phone": contract.get("signer_phone") or "",
+                "required": True,
+                "routing_order": 1,
+            }
+        ]
+    while len(signers) < 3:
+        signers.append(
+            {
+                "name": "",
+                "title": "",
+                "email": "",
+                "phone": "",
+                "required": len(signers) == 0,
+                "routing_order": len(signers) + 1,
+            }
+        )
+    return signers[:3]
+
+
+def contract_section_form_state(contract: dict[str, Any] | None) -> list[dict[str, Any]]:
+    sections = []
+    if contract and isinstance(contract.get("sections"), list):
+        for section in contract["sections"][:5]:
+            if not isinstance(section, dict):
+                continue
+            metadata = section.get("metadata") if isinstance(section.get("metadata"), dict) else {}
+            sections.append(
+                {
+                    "title": str(section.get("title") or "").strip(),
+                    "body": str(section.get("body") or "").strip(),
+                    "client_visible": metadata.get("client_visible") is not False,
+                    "requires_signature": bool(section.get("requires_signature")),
+                    "signer_index": str(section.get("signer_index") or ""),
+                }
+            )
+    while len(sections) < 5:
+        sections.append(
+            {
+                "title": "",
+                "body": "",
+                "client_visible": True,
+                "requires_signature": False,
+                "signer_index": "",
+            }
+        )
+    return sections[:5]
+
+
+def contract_signers_from_form_state(form: Any) -> list[dict[str, Any]]:
+    return [
+        {
+            "name": str(form.get(f"signer_name_{index}") or "").strip(),
+            "title": str(form.get(f"signer_title_{index}") or "").strip(),
+            "email": str(form.get(f"signer_email_{index}") or "").strip(),
+            "phone": str(form.get(f"signer_phone_{index}") or "").strip(),
+            "required": form.get(f"signer_required_{index}") == "1",
+            "routing_order": str(form.get(f"signer_routing_order_{index}") or index).strip(),
+        }
+        for index in range(1, 4)
+    ]
+
+
+def contract_sections_from_form_state(form: Any) -> list[dict[str, Any]]:
+    return [
+        {
+            "title": str(form.get(f"section_title_{index}") or "").strip(),
+            "body": str(form.get(f"section_body_{index}") or "").strip(),
+            "client_visible": form.get(f"section_client_visible_{index}") == "1",
+            "requires_signature": form.get(f"section_requires_signature_{index}") == "1",
+            "signer_index": str(form.get(f"section_signer_index_{index}") or "").strip(),
+        }
+        for index in range(1, 6)
+    ]
+
+
+def parse_contract_builder_form(form: Any) -> dict[str, Any]:
+    header = {
+        "title": str(form.get("title") or "").strip(),
+        "client_business_name": str(form.get("client_business_name") or "").strip(),
+        "client_contact_name": str(form.get("client_contact_name") or "").strip(),
+        "client_email": str(form.get("client_email") or "").strip(),
+        "client_phone": str(form.get("client_phone") or "").strip(),
+        "website_url": str(form.get("website_url") or "").strip(),
+        "legal_business_name": str(form.get("legal_business_name") or "").strip(),
+        "business_entity_type": str(form.get("business_entity_type") or "").strip(),
+        "billing_address": str(form.get("billing_address") or "").strip(),
+        "signer_name": str(form.get("signer_name_1") or form.get("signer_name") or "").strip(),
+        "signer_title": str(form.get("signer_title_1") or form.get("signer_title") or "").strip(),
+        "signer_email": str(form.get("signer_email_1") or form.get("signer_email") or "").strip(),
+        "signer_phone": str(form.get("signer_phone_1") or form.get("signer_phone") or "").strip(),
+        "effective_date": str(form.get("effective_date") or "").strip(),
+        "start_date": str(form.get("start_date") or "").strip(),
+        "term_months": parse_nonnegative_int(form.get("term_months") or "0", "Term months"),
+    }
+    required_fields = {
+        "Legal business name": header["legal_business_name"],
+        "Business entity type": header["business_entity_type"],
+        "Billing address": header["billing_address"],
+        "Primary signer name": header["signer_name"],
+        "Primary signer title": header["signer_title"],
+        "Primary signer email": header["signer_email"],
+        "Effective date": header["effective_date"],
+        "Start date": header["start_date"],
+    }
+    missing = [label for label, value in required_fields.items() if not value]
+    if missing:
+        raise ValueError("Confirm required contract fields: " + ", ".join(missing) + ".")
+
+    signers: list[dict[str, Any]] = []
+    for index in range(1, 4):
+        name = str(form.get(f"signer_name_{index}") or "").strip()
+        title = str(form.get(f"signer_title_{index}") or "").strip()
+        email = str(form.get(f"signer_email_{index}") or "").strip()
+        phone = str(form.get(f"signer_phone_{index}") or "").strip()
+        has_values = any((name, title, email, phone))
+        if not has_values and index > 1:
+            continue
+        if index == 1 and not has_values:
+            name = header["signer_name"]
+            title = header["signer_title"]
+            email = header["signer_email"]
+            phone = header["signer_phone"]
+        if has_values and (not name or not email):
+            raise ValueError(f"Signer {index} needs at least a name and email.")
+        signers.append(
+            {
+                "role": "client",
+                "name": name,
+                "title": title,
+                "email": email,
+                "phone": phone,
+                "required": form.get(f"signer_required_{index}") == "1" or index == 1,
+                "routing_order": parse_optional_contract_int(
+                    form.get(f"signer_routing_order_{index}"),
+                    default=index,
+                ),
+            }
+        )
+
+    sections: list[dict[str, Any]] = []
+    for index in range(1, 6):
+        title = str(form.get(f"section_title_{index}") or "").strip()
+        body = str(form.get(f"section_body_{index}") or "").strip()
+        if not title and not body:
+            continue
+        if not title or not body:
+            raise ValueError(f"Additional section {index} needs both a title and body.")
+        sections.append(
+            {
+                "section_key": f"custom_section_{index}",
+                "title": title,
+                "body": body,
+                "requires_signature": form.get(f"section_requires_signature_{index}") == "1",
+                "signer_index": parse_optional_contract_int(
+                    form.get(f"section_signer_index_{index}"),
+                    default=0,
+                ),
+                "metadata": {
+                    "client_visible": form.get(f"section_client_visible_{index}") == "1",
+                },
+            }
+        )
+    return {"header": header, "signers": signers, "sections": sections}
+
+
+def parse_optional_contract_int(value: Any, *, default: int = 0) -> int:
+    text = str(value or "").strip()
+    if not text:
+        return default
+    try:
+        parsed = int(text)
+    except ValueError as exc:
+        raise ValueError("Expected a numeric value.") from exc
+    return max(0, parsed)
+
+
+def contract_message_from_code(code: str | None) -> dict[str, str] | None:
+    if not code:
+        return None
+    if code == "created":
+        return {"status": "success", "message": "Contract created."}
+    if code == "saved":
+        return {"status": "success", "message": "Contract saved."}
+    if code == "generated":
+        return {"status": "success", "message": "Contract artifacts generated locally."}
+    if code == "docusign_sent":
+        return {"status": "success", "message": "DocuSign envelope sent."}
+    if code == "docusign_draft_created":
+        return {"status": "success", "message": "DocuSign draft envelope created."}
+    if code == "docusign_refreshed":
+        return {"status": "success", "message": "DocuSign envelope status refreshed."}
+    if code == "voided":
+        return {"status": "success", "message": "Contract voided."}
+    if code == "revision_created":
+        return {"status": "success", "message": "Contract revision created."}
+    if code.startswith("error:"):
+        return {"status": "error", "message": code.split(":", 1)[1]}
+    return {"status": "success", "message": str(code)}
+
+
+def contract_file_response(contract: dict[str, Any], path_key: str, download_name: str):
+    path = str(contract.get(path_key) or "").strip()
+    resolved = resolve_media_path(path) if path else None
+    if resolved is None or not resolved.exists() or not resolved.is_file():
+        abort(404)
+    return send_file(resolved, as_attachment=True, download_name=download_name)
 
 
 def load_contacts(prospect_id: int) -> list[dict[str, Any]]:

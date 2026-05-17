@@ -1782,6 +1782,122 @@ dd {
   margin-bottom: 16px;
 }
 
+.contract-summary-panel {
+  margin-bottom: 18px;
+}
+
+.contract-summary-grid,
+.contract-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.contract-summary-grid div {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.contract-summary-grid span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.contract-summary-grid strong {
+  overflow-wrap: anywhere;
+}
+
+.contract-builder-form,
+.contract-builder-section,
+.contract-signer-list,
+.contract-section-list,
+.contract-card-list {
+  display: grid;
+  gap: 14px;
+}
+
+.contract-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.contract-wide-field {
+  grid-column: 1 / -1;
+}
+
+.contract-signer-card,
+.contract-section-card,
+.contract-mini-card {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.contract-signer-card legend,
+.contract-section-card legend {
+  padding: 0 6px;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.contract-checkbox-row {
+  align-self: end;
+  min-height: 42px;
+}
+
+.contract-detail-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 0.75fr) minmax(240px, 0.55fr);
+  margin-bottom: 16px;
+}
+
+.contract-mini-card {
+  display: grid;
+  gap: 5px;
+}
+
+.contract-mini-card p,
+.contract-mini-card span {
+  margin: 0;
+  color: var(--muted);
+}
+
+.contract-actions-panel {
+  margin-bottom: 16px;
+}
+
+.contract-docusign-panel {
+  margin-bottom: 16px;
+}
+
+.contract-preflight-panel {
+  margin-top: 16px;
+}
+
+.contract-preflight-panel h3 {
+  margin: 0 0 10px;
+  font-size: 0.98rem;
+}
+
+.docusign-action-forms {
+  align-items: flex-start;
+}
+
+.docusign-action-forms form {
+  display: grid;
+  gap: 6px;
+}
+
 .quote-action-forms form {
   margin: 0;
 }
@@ -1896,6 +2012,12 @@ dd {
   border-color: #fecdca;
   background: var(--danger-soft);
   color: var(--danger);
+}
+
+.notice.warn {
+  border-color: #f8d47e;
+  background: #fff7db;
+  color: #7a4d00;
 }
 
 .pipeline-grid {
@@ -3007,6 +3129,9 @@ dd {
   .draft-status-grid,
   .quote-form-grid,
   .quote-detail-grid,
+  .contract-summary-grid,
+  .contract-detail-grid,
+  .contract-form-grid,
   .market-manager-grid,
   .admin-diagnostics-grid,
   .admin-user-card-grid {
@@ -3083,12 +3208,15 @@ dd {
   .draft-status-grid,
   .packet-grid,
   .packet-speed-grid,
-    .quote-summary-grid,
+  .quote-summary-grid,
+  .contract-summary-grid,
   .quote-form-grid,
+  .contract-form-grid,
   .quote-scope-columns,
   .quote-inline-controls,
   .quote-toggle-row,
   .quote-detail-grid,
+  .contract-detail-grid,
   .quote-custom-line,
   .task-detail-grid,
   .task-summary-grid,
@@ -3101,10 +3229,10 @@ dd {
   .contact-form,
   .contact-item,
   .timeline-item,
-    .admin-diagnostics-grid,
-    .admin-user-card-grid,
-    .admin-form-grid,
-    .admin-permission-grid {
+  .admin-diagnostics-grid,
+  .admin-user-card-grid,
+  .admin-form-grid,
+  .admin-permission-grid {
     grid-template-columns: 1fr;
   }
 
