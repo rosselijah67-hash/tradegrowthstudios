@@ -25,6 +25,7 @@ DOCUSIGN_CONFIG_KEYS = (
     "DOCUSIGN_ACCOUNT_ID",
     "DOCUSIGN_INTEGRATION_KEY",
     "DOCUSIGN_USER_ID",
+    "DOCUSIGN_RSA_PRIVATE_KEY",
     "DOCUSIGN_RSA_PRIVATE_KEY_PATH",
     "DOCUSIGN_SCOPES",
 )
@@ -62,6 +63,7 @@ class DocusignConfig:
     account_id: str
     integration_key: str
     user_id: str
+    rsa_private_key_pem: str
     rsa_private_key_path: Path
     scopes: tuple[str, ...]
 
@@ -87,6 +89,7 @@ def load_docusign_config(env_path: str | Path | None = None) -> DocusignConfig:
         else DEFAULT_DEMO_BASE_PATH
     )
     private_key_path = _clean_text(os.environ.get("DOCUSIGN_RSA_PRIVATE_KEY_PATH"))
+    private_key_pem = _normalize_private_key_pem(os.environ.get("DOCUSIGN_RSA_PRIVATE_KEY"))
     return DocusignConfig(
         environment=normalized_environment,
         auth_server=_strip_url_scheme(
@@ -98,6 +101,7 @@ def load_docusign_config(env_path: str | Path | None = None) -> DocusignConfig:
         account_id=_clean_text(os.environ.get("DOCUSIGN_ACCOUNT_ID")) or "",
         integration_key=_clean_text(os.environ.get("DOCUSIGN_INTEGRATION_KEY")) or "",
         user_id=_clean_text(os.environ.get("DOCUSIGN_USER_ID")) or "",
+        rsa_private_key_pem=private_key_pem,
         rsa_private_key_path=project_path(private_key_path or DEFAULT_PRIVATE_KEY_PATH),
         scopes=_parse_scopes(os.environ.get("DOCUSIGN_SCOPES")),
     )
@@ -127,8 +131,11 @@ def validate_docusign_config(
         errors.append("DOCUSIGN_INTEGRATION_KEY is required.")
     if not loaded.user_id:
         errors.append("DOCUSIGN_USER_ID is required for JWT impersonation.")
-    if not loaded.rsa_private_key_path:
-        errors.append("DOCUSIGN_RSA_PRIVATE_KEY_PATH is required.")
+    if loaded.rsa_private_key_pem:
+        if "PRIVATE KEY" not in loaded.rsa_private_key_pem:
+            errors.append("DOCUSIGN_RSA_PRIVATE_KEY does not look like a PEM private key.")
+    elif not loaded.rsa_private_key_path:
+        errors.append("DOCUSIGN_RSA_PRIVATE_KEY or DOCUSIGN_RSA_PRIVATE_KEY_PATH is required.")
     elif check_private_key_file and not loaded.rsa_private_key_path.exists():
         errors.append("DOCUSIGN_RSA_PRIVATE_KEY_PATH does not point to an existing file.")
     missing_scopes = [scope for scope in DEFAULT_SCOPES if scope not in loaded.scopes]
@@ -146,12 +153,17 @@ def get_private_key_bytes(config: DocusignConfig | None = None) -> bytes:
     if errors:
         raise DocusignConfigurationError("; ".join(errors))
 
-    key_bytes = loaded.rsa_private_key_path.read_bytes()
+    if loaded.rsa_private_key_pem:
+        key_bytes = loaded.rsa_private_key_pem.encode("utf-8")
+        source_label = "DOCUSIGN_RSA_PRIVATE_KEY"
+    else:
+        key_bytes = loaded.rsa_private_key_path.read_bytes()
+        source_label = "DOCUSIGN_RSA_PRIVATE_KEY_PATH"
     if not key_bytes.strip():
-        raise DocusignConfigurationError("DOCUSIGN_RSA_PRIVATE_KEY_PATH is empty.")
+        raise DocusignConfigurationError(f"{source_label} is empty.")
     if b"PRIVATE KEY" not in key_bytes:
         raise DocusignConfigurationError(
-            "DOCUSIGN_RSA_PRIVATE_KEY_PATH does not look like a PEM private key."
+            f"{source_label} does not look like a PEM private key."
         )
     return key_bytes
 
@@ -584,6 +596,15 @@ def _normalize_environment(value: str) -> str:
 def _parse_scopes(value: str | None) -> tuple[str, ...]:
     scopes = tuple(scope.strip() for scope in (value or "").split() if scope.strip())
     return scopes or DEFAULT_SCOPES
+
+
+def _normalize_private_key_pem(value: str | None) -> str:
+    clean = str(value or "").strip().strip('"').strip("'")
+    if not clean:
+        return ""
+    # Railway variables may be pasted as a multiline value or as escaped \n text.
+    clean = clean.replace("\\r\\n", "\n").replace("\\n", "\n")
+    return clean.strip() + "\n"
 
 
 def _strip_url_scheme(value: str) -> str:

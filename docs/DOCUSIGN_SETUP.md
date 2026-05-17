@@ -15,6 +15,7 @@ DOCUSIGN_BASE_PATH=https://demo.docusign.net/restapi
 DOCUSIGN_ACCOUNT_ID=
 DOCUSIGN_INTEGRATION_KEY=
 DOCUSIGN_USER_ID=
+DOCUSIGN_RSA_PRIVATE_KEY=
 DOCUSIGN_RSA_PRIVATE_KEY_PATH=secrets/docusign_private_key.pem
 DOCUSIGN_SCOPES=signature impersonation
 DOCUSIGN_WEBHOOK_ENABLED=false
@@ -34,7 +35,19 @@ the RSA private key private. Do not commit `.env` or anything under `secrets/`.
 
 ## RSA Key
 
-Store the JWT RSA private key under `secrets/`, for example:
+For Railway, prefer storing the JWT RSA private key directly in the private
+environment variable:
+
+```text
+DOCUSIGN_RSA_PRIVATE_KEY=<full PEM private key>
+```
+
+The value may be pasted as a multiline PEM or with escaped `\n` line breaks.
+When `DOCUSIGN_RSA_PRIVATE_KEY` is set, it is used instead of the file path, so
+the key persists across redeploys without relying on container files.
+
+Local development may alternatively store the JWT RSA private key under
+`secrets/`, for example:
 
 ```text
 secrets/docusign_private_key.pem

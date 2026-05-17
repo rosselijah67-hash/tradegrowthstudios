@@ -6097,8 +6097,8 @@ def docusign_config_status() -> dict[str, Any]:
         "is_production": environment == "production",
         "base_path": config.base_path,
         "auth_server": config.auth_server,
-        "private_key_configured": bool(config.rsa_private_key_path),
-        "private_key_exists": bool(config.rsa_private_key_path.exists()),
+        "private_key_configured": bool(config.rsa_private_key_pem or config.rsa_private_key_path),
+        "private_key_exists": bool(config.rsa_private_key_pem) or bool(config.rsa_private_key_path.exists()),
         "errors": errors,
     }
 
