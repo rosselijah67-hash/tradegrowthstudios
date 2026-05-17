@@ -8,12 +8,16 @@
     :root {
       color: #172033;
       background: #f4f6f8;
-      font-family: Arial, Helvetica, sans-serif;
+      font-family: "Segoe UI", "Liberation Sans", "DejaVu Sans", Arial, sans-serif;
+      font-synthesis: none;
+      text-rendering: geometricPrecision;
     }
 
     body {
       margin: 0;
       background: #f4f6f8;
+      font-weight: 400;
+      -webkit-font-smoothing: antialiased;
     }
 
     .quote-print-page {
@@ -88,11 +92,17 @@
     }
 
     .quote-meta {
-      min-width: 210px;
+      display: grid;
+      grid-template-columns: minmax(78px, auto) minmax(0, 1fr);
+      align-self: start;
+      min-width: 252px;
+      overflow: hidden;
+      border: 1px solid #dbe3ea;
+      border-radius: 6px;
+      background: #fff;
       font-size: 14px;
     }
 
-    .quote-meta div,
     .quote-info-grid div {
       display: flex;
       justify-content: space-between;
@@ -101,8 +111,41 @@
       border-bottom: 1px solid #edf1f5;
     }
 
+    .quote-meta-row {
+      display: contents;
+    }
+
+    .quote-meta-row span,
+    .quote-meta-row strong {
+      padding: 7px 9px;
+      border-bottom: 1px solid #edf1f5;
+    }
+
+    .quote-meta-row span {
+      color: #5d6978;
+      font-weight: 400;
+    }
+
+    .quote-meta-row strong {
+      min-width: 0;
+      border-left: 1px solid #edf1f5;
+      font-weight: 700;
+      text-align: right;
+      overflow-wrap: anywhere;
+    }
+
+    .quote-meta-row:last-child span,
+    .quote-meta-row:last-child strong {
+      border-bottom: 0;
+    }
+
     .quote-section {
       margin-top: 28px;
+    }
+
+    .quote-section h2 {
+      break-after: avoid;
+      page-break-after: avoid;
     }
 
     .quote-info-grid {
@@ -112,24 +155,66 @@
       font-size: 14px;
     }
 
-    table {
+    .line-items-grid {
+      --line-grid-columns: minmax(0, 4.55fr) minmax(36px, 0.45fr) minmax(46px, 0.55fr) minmax(92px, 1.05fr) minmax(76px, 0.9fr) minmax(64px, 1fr);
       width: 100%;
-      border-collapse: collapse;
       font-size: 14px;
     }
 
-    th,
-    td {
-      padding: 10px 8px;
-      border-bottom: 1px solid #e2e8ee;
-      text-align: left;
-      vertical-align: top;
+    .line-items-grid.monthly {
+      --line-grid-columns: minmax(0, 4.25fr) minmax(36px, 0.45fr) minmax(46px, 0.55fr) minmax(110px, 1.25fr) minmax(76px, 0.9fr) minmax(64px, 1fr);
     }
 
-    th:last-child,
-    td:last-child {
+    .line-item-header,
+    .line-item-row {
+      display: grid;
+      grid-template-columns: var(--line-grid-columns);
+    }
+
+    .line-item-header {
+      break-after: avoid;
+      page-break-after: avoid;
+      border: 1px solid #d7e0e8;
+      border-bottom: 0;
+      background: #f8fafc;
+      color: #172033;
+      font-weight: 800;
+    }
+
+    .line-item-row {
+      overflow: hidden;
+      border: 1px solid #d7e0e8;
+      border-top: 0;
+      background: #fff;
+      break-inside: avoid;
+      page-break-inside: avoid;
+    }
+
+    .line-item-cell {
+      padding: 10px 8px;
+      border-left: 1px solid #e2e8ee;
+      text-align: left;
+      vertical-align: top;
+      font-weight: 400;
+      overflow-wrap: anywhere;
+    }
+
+    .line-item-cell:first-child {
+      border-left: 0;
+    }
+
+    .line-item-number {
       text-align: right;
       white-space: nowrap;
+    }
+
+    .line-item-notes {
+      color: #5d6978;
+      font-size: 13px;
+    }
+
+    .line-item-name {
+      overflow-wrap: break-word;
     }
 
     .item-description {
@@ -137,6 +222,8 @@
       margin-top: 3px;
       color: #5d6978;
       font-size: 13px;
+      font-weight: 400;
+      line-height: 1.3;
     }
 
     .optional-label {
@@ -154,14 +241,19 @@
       white-space: normal;
     }
 
-    .optional-row td {
-      background: #fffaf0;
-      border-top: 2px solid #d97706;
-      border-bottom: 2px solid #d97706;
+    .optional-row {
+      border-color: #d97706;
+      border-left-width: 6px;
     }
 
-    .optional-row td:first-child {
-      border-left: 6px solid #d97706;
+    .optional-row .line-item-cell {
+      background: #fffaf0;
+    }
+
+    .empty-line-row {
+      padding: 12px 10px;
+      border: 1px solid #d7e0e8;
+      color: #5d6978;
     }
 
     .totals {
@@ -213,6 +305,10 @@
         background: #fff;
       }
 
+      body {
+        margin: 0;
+      }
+
       .quote-print-actions {
         display: none;
       }
@@ -220,18 +316,47 @@
       .quote-print-page {
         max-width: none;
         margin: 0;
-        padding: 0;
+        padding: 0.55in;
         border: 0;
         box-shadow: none;
       }
     }
 
     @page {
-      margin: 0.55in;
+      margin: 0;
     }
   </style>
 </head>
 <body>
+  {% macro line_items_grid(items, unit_price_label, monthly=False, empty_text="Scope to be confirmed.") -%}
+  <div class="line-items-grid{% if monthly %} monthly{% endif %}">
+    <div class="line-item-header" aria-hidden="true">
+      <div class="line-item-cell">Item</div>
+      <div class="line-item-cell line-item-number">Qty</div>
+      <div class="line-item-cell">Unit</div>
+      <div class="line-item-cell line-item-number">{{ unit_price_label }}</div>
+      <div class="line-item-cell line-item-number">Total</div>
+      <div class="line-item-cell">Notes</div>
+    </div>
+    {% for item in items %}
+    <div class="line-item-row{% if item.is_optional %} optional-row{% endif %}">
+      <div class="line-item-cell line-item-name">
+        <strong>{{ item.name }}</strong>
+        {% if item.is_optional %}<span class="optional-label">Optional - not included unless approved</span>{% endif %}
+        {% if item.description %}<span class="item-description">{{ item.description }}</span>{% endif %}
+      </div>
+      <div class="line-item-cell line-item-number">{{ item.quantity }}</div>
+      <div class="line-item-cell">{{ item.unit_label }}</div>
+      <div class="line-item-cell line-item-number">{{ item.unit_price }}{% if monthly %}/mo{% endif %}</div>
+      <div class="line-item-cell line-item-number">{{ item.line_total }}{% if monthly %}/mo{% endif %}</div>
+      <div class="line-item-cell line-item-notes">{{ item.salesman_notes }}</div>
+    </div>
+    {% else %}
+    <div class="empty-line-row">{{ empty_text }}</div>
+    {% endfor %}
+  </div>
+  {%- endmacro %}
+
   <div class="quote-print-actions">
     <button class="print-button" type="button" onclick="window.print()">Print / Save as PDF</button>
   </div>
@@ -245,10 +370,10 @@
         <p class="quote-intro">This quote lists the website work, optional add-ons, and monthly ongoing items for {{ business_name }}. Optional items are clearly marked and are not included in the project total unless approved.</p>
       </div>
       <div class="quote-meta">
-        <div><span>Quote</span><strong>{{ quote_key }}</strong></div>
-        <div><span>Date</span><strong>{{ quote_date }}</strong></div>
-        <div><span>Valid until</span><strong>{{ valid_until or "TBD" }}</strong></div>
-        <div><span>Status</span><strong><span class="status-pill">{{ status }}</span></strong></div>
+        <div class="quote-meta-row"><span>Quote</span><strong>{{ quote_key }}</strong></div>
+        <div class="quote-meta-row"><span>Date</span><strong>{{ quote_date }}</strong></div>
+        <div class="quote-meta-row"><span>Valid until</span><strong>{{ valid_until or "TBD" }}</strong></div>
+        <div class="quote-meta-row"><span>Status</span><strong><span class="status-pill">{{ status }}</span></strong></div>
       </div>
     </header>
 
@@ -266,85 +391,13 @@
 
     <section class="quote-section">
       <h2>One-Time Website Work</h2>
-      <table>
-        <thead>
-          <tr>
-            <th>Item</th>
-            <th>Qty</th>
-            <th>Unit</th>
-            <th>Unit Price</th>
-            <th>Total</th>
-            <th>Notes</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for item in one_time_items %}
-          <tr{% if item.is_optional %} class="optional-row"{% endif %}>
-            <td>
-              <strong>{{ item.name }}</strong>
-              {% if item.is_optional %}<span class="optional-label">Optional - not included unless approved</span>{% endif %}
-              {% if item.description %}<span class="item-description">{{ item.description }}</span>{% endif %}
-            </td>
-            <td>{{ item.quantity }}</td>
-            <td>{{ item.unit_label }}</td>
-            <td>{{ item.unit_price }}</td>
-            <td>{{ item.line_total }}</td>
-            <td>{{ item.salesman_notes }}</td>
-          </tr>
-          {% endfor %}
-          {% for item in discount_items %}
-          <tr>
-            <td>
-              <strong>{{ item.name }}</strong>
-              {% if item.description %}<span class="item-description">{{ item.description }}</span>{% endif %}
-            </td>
-            <td>{{ item.quantity }}</td>
-            <td>{{ item.unit_label }}</td>
-            <td>{{ item.unit_price }}</td>
-            <td>{{ item.line_total }}</td>
-            <td>{{ item.salesman_notes }}</td>
-          </tr>
-          {% endfor %}
-          {% if not one_time_items and not discount_items %}
-          <tr>
-            <td colspan="6">Scope to be confirmed.</td>
-          </tr>
-          {% endif %}
-        </tbody>
-      </table>
+      {{ line_items_grid(one_time_items + discount_items, "Unit Price") }}
     </section>
 
     <section class="quote-section">
       <h2>Monthly Ongoing Work</h2>
       {% if recurring_items %}
-      <table>
-        <thead>
-          <tr>
-            <th>Item</th>
-            <th>Qty</th>
-            <th>Unit</th>
-            <th>Monthly Unit Price</th>
-            <th>Total</th>
-            <th>Notes</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for item in recurring_items %}
-          <tr{% if item.is_optional %} class="optional-row"{% endif %}>
-            <td>
-              <strong>{{ item.name }}</strong>
-              {% if item.is_optional %}<span class="optional-label">Optional - not included unless approved</span>{% endif %}
-              {% if item.description %}<span class="item-description">{{ item.description }}</span>{% endif %}
-            </td>
-            <td>{{ item.quantity }}</td>
-            <td>{{ item.unit_label }}</td>
-            <td>{{ item.unit_price }}/mo</td>
-            <td>{{ item.line_total }}/mo</td>
-            <td>{{ item.salesman_notes }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+      {{ line_items_grid(recurring_items, "Monthly Unit Price", monthly=True) }}
       {% else %}
       <p>None selected.</p>
       {% endif %}
@@ -354,7 +407,9 @@
       <h2>Totals</h2>
       <div class="totals">
         <div><span>One-time subtotal</span><strong>{{ one_time_subtotal }}</strong></div>
+        {% if has_discount %}
         <div><span>Discount</span><strong>{{ discount_total }}</strong></div>
+        {% endif %}
         <div class="grand-total"><span>Project total</span><strong>{{ one_time_total }}</strong></div>
         <div><span>Monthly ongoing</span><strong>{{ recurring_total }}/mo</strong></div>
         <div><span>Deposit due to start work</span><strong>{{ deposit_due }}</strong></div>

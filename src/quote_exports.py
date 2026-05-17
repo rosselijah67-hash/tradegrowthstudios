@@ -56,6 +56,7 @@ def build_export_context(
         for item in visible_items
         if item.get("item_type") == "discount"
     ]
+    discount_total_cents = int(quote.get("one_time_discount_cents") or 0)
     custom_assumptions = _quote_assumptions(quote)
     assumptions = _dedupe([*custom_assumptions, *DEFAULT_ASSUMPTIONS])
     if valid_until:
@@ -81,7 +82,8 @@ def build_export_context(
         "discount_items": discount_items,
         "one_time_total": format_money(quote.get("one_time_total_cents")),
         "one_time_subtotal": format_money(quote.get("one_time_subtotal_cents")),
-        "discount_total": format_money(quote.get("one_time_discount_cents")),
+        "discount_total": format_money(discount_total_cents),
+        "has_discount": discount_total_cents > 0,
         "recurring_total": format_money(quote.get("recurring_monthly_total_cents")),
         "deposit_due": format_money(quote.get("deposit_due_cents")),
         "balance_due": format_money(quote.get("balance_due_cents")),
