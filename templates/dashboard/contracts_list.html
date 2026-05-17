@@ -11,14 +11,23 @@
 </section>
 
 {% if message %}
-<div class="notice {{ message.status }}">{{ message.message }}</div>
+<div class="notice {{ message.status }}" data-dashboard-toast>{{ message.message }}</div>
 {% endif %}
+
+<nav class="filter-pill-row" aria-label="Contract status filter">
+  {% for option in contract_filter_options %}
+  <a class="filter-pill {% if option.active %}is-active{% endif %}" href="{{ option.href }}">
+    <span>{{ option.label }}</span>
+    <strong>{{ option.count }}</strong>
+  </a>
+  {% endfor %}
+</nav>
 
 <section class="panel table-panel">
   <div class="panel-header">
     <div>
       <h2>Contract Queue</h2>
-      <p>{{ contracts|length }} visible contracts</p>
+      <p>{{ contracts|length }} {{ contract_filter|pretty_label|lower }} contract{{ "" if contracts|length == 1 else "s" }}</p>
     </div>
   </div>
   <div class="table-wrap">

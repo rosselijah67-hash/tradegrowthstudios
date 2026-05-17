@@ -1856,6 +1856,13 @@ def restore_state_for_prospect(prospect: dict[str, Any], trash: dict[str, Any]) 
             "human_review_status": previous_review_status or prospect.get("human_review_status"),
             "human_review_decision": previous_review_decision or prospect.get("human_review_decision"),
         }
+    if _normalize_token(prospect.get("qualification_status")) == "NO_WEBSITE":
+        return {
+            "status": "NO_WEBSITE",
+            "next_action": "COLD_CALL_WEBSITE",
+            "human_review_status": previous_review_status or prospect.get("human_review_status"),
+            "human_review_decision": previous_review_decision or None,
+        }
     if _normalize_token(prospect.get("audit_data_status")) == "READY":
         return {
             "status": "PENDING_REVIEW",
@@ -3773,10 +3780,19 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     @app.get("/contracts")
     @require_dashboard_permission("quotes")
     def contracts_list() -> str:
+        selected_filter = normalize_contract_list_filter(request.args.get("filter"))
+        all_contracts = list_contracts_for_current_user(limit=1000)
+        visible_contracts = [
+            contract
+            for contract in all_contracts
+            if contract_status_filter_bucket(contract.get("status")) == selected_filter
+        ]
         return render_template(
             "dashboard/contracts_list.html",
             active_page="contracts",
-            contracts=list_contracts_for_current_user(),
+            contracts=visible_contracts,
+            contract_filter=selected_filter,
+            contract_filter_options=contract_filter_options(all_contracts, selected_filter),
             message=contract_message_from_code(request.args.get("result")),
         )
 
@@ -6007,6 +6023,49 @@ def list_contracts_for_current_user(limit: int = 200) -> list[dict[str, Any]]:
         contract["generated_files"] = contract_generated_file_info(contract)
         contracts.append(contract)
     return contracts
+
+
+CONTRACT_ACTIVE_STATUSES = {"draft", "generated", "sent", "delivered"}
+CONTRACT_SIGNED_STATUSES = {"completed"}
+CONTRACT_FILTER_KEYS = ("active", "signed", "other")
+
+
+def normalize_contract_list_filter(value: Any) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in CONTRACT_FILTER_KEYS else "active"
+
+
+def contract_status_filter_bucket(status: Any) -> str:
+    normalized = str(status or "").strip().lower()
+    if normalized in CONTRACT_ACTIVE_STATUSES:
+        return "active"
+    if normalized in CONTRACT_SIGNED_STATUSES:
+        return "signed"
+    return "other"
+
+
+def contract_filter_options(
+    contracts: list[dict[str, Any]],
+    selected_filter: str,
+) -> list[dict[str, Any]]:
+    counts = {key: 0 for key in CONTRACT_FILTER_KEYS}
+    for contract in contracts:
+        bucket = contract_status_filter_bucket(contract.get("status"))
+        counts[bucket] = counts.get(bucket, 0) + 1
+    return [
+        {
+            "key": key,
+            "label": label,
+            "count": counts.get(key, 0),
+            "active": key == selected_filter,
+            "href": url_for("contracts_list", filter=key),
+        }
+        for key, label in (
+            ("active", "Active"),
+            ("signed", "Signed"),
+            ("other", "Other"),
+        )
+    ]
 
 
 def sync_contract_territory_fields(

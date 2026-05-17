@@ -6,7 +6,7 @@
 {% set href = prospect.website_url|external_href %}
 
 {% if message %}
-  <div class="notice success">{{ message }}</div>
+  <div class="notice success" data-dashboard-toast>{{ message }}</div>
 {% endif %}
 
 <section class="case-header">

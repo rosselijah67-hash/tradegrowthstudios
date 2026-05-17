@@ -18,7 +18,7 @@
 </section>
 
 {% if message %}
-<div class="notice {{ message.status }}">{{ message.message }}</div>
+<div class="notice {{ message.status }}" data-dashboard-toast>{{ message.message }}</div>
 {% endif %}
 
 {% set assumption_items = quote.assumptions.get('items', []) if quote.assumptions else [] %}

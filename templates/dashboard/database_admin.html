@@ -12,11 +12,11 @@
 </section>
 
 {% if error %}
-<div class="notice error">{{ error }}</div>
+<div class="notice error" data-dashboard-toast>{{ error }}</div>
 {% endif %}
 
 {% if result %}
-<div class="notice success">
+<div class="notice success" data-dashboard-toast>
   Imported database successfully. Backup: {{ result.backup_path or "none" }}.
 </div>
 {% endif %}

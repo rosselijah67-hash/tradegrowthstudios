@@ -12,7 +12,7 @@
 </section>
 
 {% if message %}
-  <div class="notice {{ message.status }}">{{ message.message }}</div>
+  <div class="notice {{ message.status }}" data-dashboard-toast>{{ message.message }}</div>
 {% endif %}
 
 <form class="market-filter-form" method="get" action="{{ url_for('overview') }}">

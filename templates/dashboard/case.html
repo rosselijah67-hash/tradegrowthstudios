@@ -12,13 +12,13 @@
 {% set franchise_exclusion = prospect.metadata.franchise_exclusion if prospect.metadata.franchise_exclusion is defined else {} %}
 
 {% if review_message %}
-<div class="notice success">{{ review_message }}</div>
+<div class="notice success" data-dashboard-toast>{{ review_message }}</div>
 {% endif %}
 {% if quote_message %}
-<div class="notice {{ quote_message.status }}">{{ quote_message.message }}</div>
+<div class="notice {{ quote_message.status }}" data-dashboard-toast>{{ quote_message.message }}</div>
 {% endif %}
 {% if contract_message %}
-<div class="notice {{ contract_message.status }}">{{ contract_message.message }}</div>
+<div class="notice {{ contract_message.status }}" data-dashboard-toast>{{ contract_message.message }}</div>
 {% endif %}
 
 <section class="case-header">

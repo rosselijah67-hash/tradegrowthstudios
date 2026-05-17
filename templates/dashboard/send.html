@@ -14,7 +14,7 @@
 </section>
 
 {% if message %}
-  <div class="notice {{ message.status }}">{{ message.message }}</div>
+  <div class="notice {{ message.status }}" data-dashboard-toast>{{ message.message }}</div>
 {% endif %}
 
 <section class="panel send-safety-panel">

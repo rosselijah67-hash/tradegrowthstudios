@@ -54,5 +54,59 @@
   <main class="page-shell">
     {% block content %}{% endblock %}
   </main>
+  <div class="dashboard-toast-stack" data-dashboard-toast-stack aria-live="polite" aria-atomic="false"></div>
+  <script>
+    (() => {
+      const TOAST_TIMEOUT_MS = 7000;
+
+      function dismissToast(toast) {
+        toast.classList.add("is-hiding");
+        window.setTimeout(() => toast.remove(), 180);
+      }
+
+      function showDashboardToast(source, stack) {
+        const toast = document.createElement("div");
+        const classNames = Array.from(source.classList);
+        toast.className = ["dashboard-toast", ...classNames].join(" ");
+        toast.setAttribute("role", source.classList.contains("error") ? "alert" : "status");
+
+        const text = document.createElement("span");
+        text.textContent = source.textContent.trim();
+        toast.appendChild(text);
+
+        const closeButton = document.createElement("button");
+        closeButton.type = "button";
+        closeButton.className = "dashboard-toast-close";
+        closeButton.setAttribute("aria-label", "Dismiss notification");
+        closeButton.textContent = "x";
+        toast.appendChild(closeButton);
+
+        const timer = window.setTimeout(() => dismissToast(toast), TOAST_TIMEOUT_MS);
+        closeButton.addEventListener("click", () => {
+          window.clearTimeout(timer);
+          dismissToast(toast);
+        });
+
+        stack.appendChild(toast);
+        source.remove();
+      }
+
+      function initDashboardToasts() {
+        const stack = document.querySelector("[data-dashboard-toast-stack]");
+        if (!stack) {
+          return;
+        }
+        document.querySelectorAll("[data-dashboard-toast]").forEach((source) => {
+          showDashboardToast(source, stack);
+        });
+      }
+
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", initDashboardToasts);
+      } else {
+        initDashboardToasts();
+      }
+    })();
+  </script>
 </body>
 </html>

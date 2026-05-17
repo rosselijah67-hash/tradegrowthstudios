@@ -45,6 +45,10 @@ CLIENT_ANCHORS = {
     3: {"sign": "/tgs_client3_sign/", "date": "/tgs_client3_date/"},
 }
 PROVIDER_ANCHORS = {"sign": "/tgs_provider_sign/", "date": "/tgs_provider_date/"}
+ANCHOR_TAB_OFFSETS = {
+    "sign": {"x_offset": "-170", "y_offset": "-18"},
+    "date": {"x_offset": "-92", "y_offset": "-14"},
+}
 
 
 class DocusignConfigurationError(ValueError):
@@ -272,21 +276,23 @@ def build_anchor_tabs_for_signer(
         raise ValueError("Built-in DocuSign anchors support up to three client signers.")
 
     label_prefix = "provider" if anchors is PROVIDER_ANCHORS else f"client{signer_index}"
+    sign_offsets = ANCHOR_TAB_OFFSETS["sign"]
+    date_offsets = ANCHOR_TAB_OFFSETS["date"]
     return {
         "signHereTabs": [
             _anchor_tab(
                 anchors["sign"],
                 tab_label=f"tgs_{label_prefix}_sign",
-                x_offset="0",
-                y_offset="0",
+                x_offset=sign_offsets["x_offset"],
+                y_offset=sign_offsets["y_offset"],
             )
         ],
         "dateSignedTabs": [
             _anchor_tab(
                 anchors["date"],
                 tab_label=f"tgs_{label_prefix}_date",
-                x_offset="0",
-                y_offset="0",
+                x_offset=date_offsets["x_offset"],
+                y_offset=date_offsets["y_offset"],
             )
         ],
     }

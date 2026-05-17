@@ -217,6 +217,13 @@ def compute_pipeline_stage(row: Any) -> str:
     human_review_decision = _token(_row_get(row, "human_review_decision"))
     next_action = normalize_status(_row_get(row, "next_action"))
 
+    if qualification_status == QualificationStatus.NO_WEBSITE and status in {
+        "",
+        ProspectStatus.NEW,
+        ProspectStatus.NO_WEBSITE,
+    }:
+        return ProspectStatus.NO_WEBSITE
+
     for token in (status, next_action):
         if token in PIPELINE_STAGE_BUCKETS:
             return token
