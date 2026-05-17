@@ -11,6 +11,9 @@
 </section>
 
 <form class="market-filter-form" method="get" action="{{ url_for('crm') }}">
+  {% if lead_search.query %}
+    <input type="hidden" name="{{ lead_search.param_name }}" value="{{ lead_search.query }}">
+  {% endif %}
   <label>
     <span>Market</span>
     <select name="market">
@@ -25,6 +28,8 @@
     <a class="button" href="{{ url_for('crm') }}">Reset</a>
   </div>
 </form>
+
+{% include "dashboard/_lead_search.html" %}
 
 <section class="crm-board">
   {% for group in groups %}

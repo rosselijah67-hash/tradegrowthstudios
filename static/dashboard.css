@@ -474,7 +474,7 @@ h3 {
 
 .filters {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr 1.4fr 120px auto;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
   gap: 12px;
   align-items: end;
   margin-bottom: 16px;
@@ -495,6 +495,97 @@ h3 {
   border: 1px solid var(--line);
   border-radius: 10px;
   box-shadow: 0 8px 22px rgba(17, 24, 39, 0.04);
+}
+
+.lead-search-panel {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 18px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 8px 22px rgba(17, 24, 39, 0.04);
+}
+
+.lead-search-form {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.lead-search-field input {
+  min-height: 44px;
+  font-weight: 700;
+}
+
+.lead-search-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.lead-search-results {
+  display: grid;
+  gap: 8px;
+}
+
+.lead-search-result {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.85fr) minmax(180px, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.lead-search-result:hover {
+  border-color: var(--accent);
+  background: #ffffff;
+  text-decoration: none;
+}
+
+.lead-search-result-main,
+.lead-search-result-detail {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.lead-search-result-main strong,
+.lead-search-result-detail {
+  overflow-wrap: anywhere;
+}
+
+.lead-search-result-main small,
+.lead-search-result-detail {
+  color: var(--muted);
+  font-size: 0.84rem;
+  font-weight: 700;
+}
+
+.lead-search-result-detail em {
+  width: fit-content;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #eef4ff;
+  color: #1d4ed8;
+  font-style: normal;
+  font-size: 0.76rem;
+  font-weight: 850;
+}
+
+.lead-search-result b {
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #ffffff;
+  font-size: 0.84rem;
+  text-align: center;
+  white-space: nowrap;
 }
 
 label span {
@@ -763,7 +854,7 @@ table {
 }
 
 .leads-table {
-  min-width: 0;
+  min-width: 1180px;
   table-layout: fixed;
 }
 
@@ -814,7 +905,12 @@ table {
 
 .leads-table th:nth-child(10),
 .leads-table td:nth-child(10) {
-  width: 160px;
+  width: 150px;
+}
+
+.leads-table th:nth-child(11),
+.leads-table td:nth-child(11) {
+  width: 82px;
 }
 
 th,
@@ -3272,6 +3368,10 @@ dd {
 
 @media (max-width: 720px) {
 
+  body {
+    font-size: 14px;
+  }
+
   .page-heading,
   .case-header,
   .section-header,
@@ -3281,7 +3381,17 @@ dd {
   }
 
   .app-header {
+    position: static;
+    min-height: 0;
     padding: 14px 16px;
+  }
+
+  .brand {
+    font-size: 1.12rem;
+  }
+
+  .subtitle {
+    display: none;
   }
 
   .nav-links {
@@ -3290,14 +3400,41 @@ dd {
     justify-content: flex-start;
     overflow-x: auto;
     padding-bottom: 3px;
+    gap: 8px;
+    scrollbar-gutter: stable;
   }
 
   .nav-links a {
     flex: 0 0 auto;
+    min-height: 40px;
+    padding: 9px 12px;
+    font-size: 0.92rem;
+  }
+
+  .nav-user {
+    flex: 0 0 auto;
+    min-height: 40px;
+  }
+
+  .nav-links::after {
+    display: none;
+  }
+
+  select,
+  input,
+  textarea {
+    min-height: 44px;
+    font-size: 16px;
   }
 
   .filter-actions {
     flex-wrap: wrap;
+  }
+
+  .filter-actions .button,
+  .lead-search-actions .button,
+  .page-heading>.button {
+    flex: 1 1 130px;
   }
 
   .dashboard-toast-stack {
@@ -3310,6 +3447,23 @@ dd {
   .page-shell {
     width: min(100% - 24px, 1440px);
     padding-top: 18px;
+  }
+
+  .lead-search-form,
+  .lead-search-result {
+    grid-template-columns: 1fr;
+  }
+
+  .lead-search-actions {
+    flex-wrap: wrap;
+  }
+
+  .lead-search-result b {
+    width: 100%;
+  }
+
+  .table-wrap {
+    -webkit-overflow-scrolling: touch;
   }
 
   .summary-grid,
@@ -3356,6 +3510,42 @@ dd {
   .admin-form-grid,
   .admin-permission-grid {
     grid-template-columns: 1fr;
+  }
+
+  .panel-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .crm-board {
+    --crm-card-height: auto;
+    --crm-card-list-height: auto;
+  }
+
+  .crm-group-stage-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .crm-card-list {
+    min-height: 0;
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+
+  .crm-card {
+    min-height: 0;
+  }
+
+  .crm-card-top strong {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .crm-card-actions .table-action {
+    flex: 1 1 120px;
+    justify-content: center;
   }
 
   .task-title-field,

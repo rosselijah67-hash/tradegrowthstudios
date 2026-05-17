@@ -10,7 +10,12 @@
   </div>
 </section>
 
+{% include "dashboard/_lead_search.html" %}
+
 <form class="filters" method="get" action="{{ url_for('leads') }}">
+  {% if filters.q %}
+    <input type="hidden" name="q" value="{{ filters.q }}">
+  {% endif %}
   <label>
     <span>Stage</span>
     <select name="stage">
@@ -39,10 +44,6 @@
     </select>
   </label>
   <label>
-    <span>Search</span>
-    <input type="search" name="q" value="{{ filters.q }}" placeholder="Business, site, phone">
-  </label>
-  <label>
     <span>Limit</span>
     <input type="number" name="limit" min="1" max="1000" value="{{ filters.limit }}">
   </label>
@@ -67,6 +68,7 @@
           <th>Workflow</th>
           <th>Scores</th>
           <th>Stage</th>
+          <th>Case</th>
         </tr>
       </thead>
       <tbody>
@@ -102,10 +104,11 @@
               <span><strong>{{ lead.website_pain_score }}</strong> pain</span>
             </td>
             <td><span class="pill">{{ lead.pipeline_stage|pretty_label }}</span></td>
+            <td><a class="table-action" href="{{ url_for('case_file', prospect_id=lead.id) }}">Open</a></td>
           </tr>
         {% else %}
           <tr>
-            <td colspan="10" class="empty">No leads match the current filters.</td>
+            <td colspan="11" class="empty">No leads match the current filters.</td>
           </tr>
         {% endfor %}
       </tbody>

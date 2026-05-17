@@ -3170,6 +3170,7 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             selected_market_from_request(),
             allow_unknown_for_admin=True,
         )
+        lead_search_query = request.args.get("lead_q", "").strip()
         stage_counts = load_stage_counts(selected_market)
         trash_summary = load_trash_summary(selected_market)
         open_task_count = load_overview_open_task_count(selected_market)
@@ -3186,6 +3187,13 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             active_page="overview",
             db_path=app.config["DATABASE_PATH"],
             market_filter=market_filter_context(selected_market),
+            lead_search=build_lead_search_context(
+                "overview",
+                query=lead_search_query,
+                market=selected_market,
+                hidden_fields=[("market", selected_market)],
+                reset_args=overview_market_args(selected_market),
+            ),
             message=message,
             stage_counts=stage_counts,
             overview_command_cards=overview_command_cards(
@@ -3253,6 +3261,28 @@ def create_app(db_path: str | Path | None = None) -> Flask:
             "dashboard/leads.html",
             active_page="leads",
             filters=filters,
+            lead_search=build_lead_search_context(
+                "leads",
+                query=filters["q"],
+                param_name="q",
+                hidden_fields=[
+                    ("stage", filters["stage"]),
+                    ("market", filters["market"]),
+                    ("niche", filters["niche"]),
+                    ("limit", filters["limit"]),
+                ],
+                reset_args={
+                    key: value
+                    for key, value in {
+                        "stage": filters["stage"],
+                        "market": filters["market"],
+                        "niche": filters["niche"],
+                        "limit": filters["limit"],
+                    }.items()
+                    if value
+                },
+                results=lead_rows[:8] if filters["q"] else None,
+            ),
             leads=lead_rows,
             stage_options=PIPELINE_STAGE_BUCKETS,
             market_options=build_market_options(filters["market"]),
@@ -3325,11 +3355,19 @@ def create_app(db_path: str | Path | None = None) -> Flask:
     @app.get("/crm")
     def crm() -> str:
         selected_market = selected_market_from_request()
+        lead_search_query = request.args.get("lead_q", "").strip()
         groups = load_crm_groups(selected_market)
         return render_template(
             "dashboard/crm.html",
             active_page="crm",
             market_filter=market_filter_context(selected_market),
+            lead_search=build_lead_search_context(
+                "crm",
+                query=lead_search_query,
+                market=selected_market,
+                hidden_fields=[("market", selected_market)],
+                reset_args=overview_market_args(selected_market),
+            ),
             groups=groups,
             stages=CRM_STAGES,
         )
@@ -5699,6 +5737,106 @@ def load_leads(filters: dict[str, Any]) -> list[dict[str, Any]]:
         rows = [row for row in rows if row["pipeline_stage"] == selected_stage]
 
     return rows[: filters.get("limit", DEFAULT_LIMIT)]
+
+
+def load_lead_search_results(
+    query: str,
+    *,
+    market: str = "",
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    normalized_query = str(query or "").strip()
+    if not normalized_query:
+        return []
+
+    normalized_limit = max(1, min(int(limit or 8), 20))
+    clauses = ["1 = 1"]
+    params: list[Any] = []
+    append_active_prospect_filter(clauses, params)
+    append_visible_market_scope(clauses, params, market)
+
+    pattern = f"%{normalized_query}%"
+    clauses.append(
+        """
+        (
+            CAST(id AS TEXT) LIKE ?
+            OR business_name LIKE ?
+            OR website_url LIKE ?
+            OR phone LIKE ?
+            OR market LIKE ?
+            OR niche LIKE ?
+            OR status LIKE ?
+            OR qualification_status LIKE ?
+            OR next_action LIKE ?
+        )
+        """
+    )
+    params.extend([pattern] * 9)
+    params.extend([normalized_query, normalized_query, f"{normalized_query}%", normalized_limit])
+
+    rows = get_connection().execute(
+        f"""
+        SELECT {", ".join(LEADS_COLUMNS)}
+        FROM prospects
+        WHERE {" AND ".join(clauses)}
+        ORDER BY
+            CASE
+                WHEN CAST(id AS TEXT) = ? THEN 0
+                WHEN business_name = ? THEN 1
+                WHEN business_name LIKE ? THEN 2
+                ELSE 3
+            END,
+            expected_close_score DESC,
+            website_pain_score DESC,
+            id DESC
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+
+    results = [_row_to_dict(row) for row in rows]
+    for result in results:
+        result["pipeline_stage"] = compute_pipeline_stage(result)
+        metadata = parse_json_field(result.get("metadata_json"))
+        result["metadata"] = metadata if isinstance(metadata, dict) else {}
+        result["lead_category_label"] = lead_category_label(result, result["metadata"])
+    return results
+
+
+def build_lead_search_context(
+    endpoint: str,
+    *,
+    query: str = "",
+    market: str = "",
+    param_name: str = "lead_q",
+    hidden_fields: list[tuple[str, Any]] | None = None,
+    reset_args: dict[str, Any] | None = None,
+    results: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    normalized_query = str(query or "").strip()
+    clean_hidden_fields = [
+        {"name": str(name), "value": str(value)}
+        for name, value in (hidden_fields or [])
+        if value not in (None, "")
+    ]
+    clean_reset_args = {
+        key: value
+        for key, value in (reset_args or {}).items()
+        if value not in (None, "")
+    }
+    return {
+        "action": url_for(endpoint),
+        "reset_href": url_for(endpoint, **clean_reset_args),
+        "param_name": param_name,
+        "query": normalized_query,
+        "hidden_fields": clean_hidden_fields,
+        "results": (
+            results
+            if results is not None
+            else load_lead_search_results(normalized_query, market=market)
+        ),
+        "submitted": bool(normalized_query),
+    }
 
 
 def _enrich_trash_row(row: dict[str, Any]) -> dict[str, Any]:

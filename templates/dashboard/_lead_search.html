@@ -1,0 +1,51 @@
+{% if lead_search %}
+<section class="lead-search-panel" aria-label="Lead search">
+  <form class="lead-search-form" method="get" action="{{ lead_search.action }}">
+    {% for field in lead_search.hidden_fields %}
+      <input type="hidden" name="{{ field.name }}" value="{{ field.value }}">
+    {% endfor %}
+    <label class="lead-search-field">
+      <span>Find lead</span>
+      <input
+        type="search"
+        name="{{ lead_search.param_name }}"
+        value="{{ lead_search.query }}"
+        placeholder="Search business, site, phone, market, ID"
+        autocomplete="off"
+      >
+    </label>
+    <div class="lead-search-actions">
+      <button class="button primary" type="submit">Search</button>
+      {% if lead_search.query %}
+        <a class="button" href="{{ lead_search.reset_href }}">Clear</a>
+      {% endif %}
+    </div>
+  </form>
+
+  {% if lead_search.submitted %}
+    <div class="lead-search-results" aria-live="polite">
+      {% for lead in lead_search.results %}
+        <a class="lead-search-result" href="{{ url_for('case_file', prospect_id=lead.id) }}">
+          <span class="lead-search-result-main">
+            <strong>{{ lead.business_name or ("Lead #" ~ lead.id) }}</strong>
+            <small>
+              #{{ lead.id }}
+              {% if lead.market %} / {{ lead.market }}{% endif %}
+              {% if lead.niche %} / {{ lead.niche }}{% endif %}
+            </small>
+          </span>
+          <span class="lead-search-result-detail">
+            {{ lead.website_url or lead.phone or (lead.pipeline_stage|pretty_label) }}
+            {% if lead.lead_category_label %}
+              <em>{{ lead.lead_category_label }}</em>
+            {% endif %}
+          </span>
+          <b>Open Case</b>
+        </a>
+      {% else %}
+        <p class="empty">No active leads match this search.</p>
+      {% endfor %}
+    </div>
+  {% endif %}
+</section>
+{% endif %}
