@@ -110,13 +110,15 @@
               {% endif %}
             </td>
             <td><span class="pill">{{ row.pipeline_stage|pretty_label }}</span></td>
-            <td class="table-actions">
-              <form method="post" action="{{ url_for('restore_trash', prospect_id=row.id) }}">
-    {{ csrf_input() }}
-                <input type="hidden" name="market" value="{{ market_filter.selected }}">
-                <input type="hidden" name="category" value="{{ category_filter.selected }}">
-                <button class="button primary" type="submit">Revive</button>
-              </form>
+            <td>
+              <div class="table-actions">
+                <form method="post" action="{{ url_for('restore_trash', prospect_id=row.id) }}">
+                  {{ csrf_input() }}
+                  <input type="hidden" name="market" value="{{ market_filter.selected }}">
+                  <input type="hidden" name="category" value="{{ category_filter.selected }}">
+                  <button class="button primary" type="submit">Revive</button>
+                </form>
+              </div>
             </td>
           </tr>
         {% else %}
